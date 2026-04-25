@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>股票回测终端原型</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="terminal-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">BT</div>
+          <div>
+            <h1>闪电回测终端</h1>
+            <span id="marketStatus">A 股手动回测 · 演示行情</span>
+          </div>
+        </div>
+
+        <div class="market-strip" id="marketStrip"></div>
+
+        <div class="top-actions">
+          <label class="field compact">
+            <span>回测日期</span>
+            <input id="backtestDate" type="date" />
+          </label>
+          <button id="prevDay" class="icon-button" title="上一交易日" aria-label="上一交易日">‹</button>
+          <button id="playToggle" class="icon-button primary" title="自动推进" aria-label="自动推进">▶</button>
+          <button id="nextDay" class="icon-button" title="下一交易日" aria-label="下一交易日">›</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="quote-panel">
+          <div class="panel-title">
+            <span>行情池</span>
+            <span id="visibleDateTag"></span>
+          </div>
+          <div class="quote-search">
+            <input id="stockSearch" type="search" placeholder="代码 / 名称" />
+          </div>
+          <div id="quoteList" class="quote-list"></div>
+        </aside>
+
+        <section class="chart-panel">
+          <div class="chart-toolbar">
+            <div class="symbol-head">
+              <strong id="symbolTitle">000001 平安银行</strong>
+              <span id="symbolMeta"></span>
+            </div>
+
+            <div class="indicator-controls">
+              <label><input id="showMA" type="checkbox" checked /> MA</label>
+              <label><input id="showBOLL" type="checkbox" /> BOLL</label>
+              <div class="segmented" role="tablist" aria-label="副图指标">
+                <button class="segment active" data-panel="macd">MACD</button>
+                <button class="segment" data-panel="rsi">RSI</button>
+                <button class="segment" data-panel="kdj">KDJ</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="price-readout" id="priceReadout"></div>
+
+          <div class="canvas-stack">
+            <canvas id="priceCanvas"></canvas>
+            <canvas id="indicatorCanvas"></canvas>
+          </div>
+        </section>
+
+        <aside class="trade-panel">
+          <div class="panel-title">
+            <span>模拟交易</span>
+            <button id="resetAccount" class="text-button">重置</button>
+          </div>
+
+          <div class="account-grid">
+            <div>
+              <span>总资产</span>
+              <strong id="equityValue">--</strong>
+            </div>
+            <div>
+              <span>可用资金</span>
+              <strong id="cashValue">--</strong>
+            </div>
+            <div>
+              <span>持仓市值</span>
+              <strong id="marketValue">--</strong>
+            </div>
+            <div>
+              <span>浮动盈亏</span>
+              <strong id="pnlValue">--</strong>
+            </div>
+          </div>
+
+          <div class="order-ticket">
+            <label class="field">
+              <span>交易数量</span>
+              <input id="orderQty" type="number" min="100" step="100" value="1000" />
+            </label>
+            <div class="order-price">
+              <span>当前价</span>
+              <strong id="orderPrice">--</strong>
+            </div>
+            <div class="trade-buttons">
+              <button id="buyBtn" class="buy-button">买入</button>
+              <button id="sellBtn" class="sell-button">卖出</button>
+            </div>
+          </div>
+
+          <div class="position-block">
+            <div class="panel-title slim">
+              <span>当前持仓</span>
+            </div>
+            <div id="positionList" class="position-list"></div>
+          </div>
+
+          <div class="trade-log-block">
+            <div class="panel-title slim">
+              <span>成交记录</span>
+            </div>
+            <div id="tradeLog" class="trade-log"></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
