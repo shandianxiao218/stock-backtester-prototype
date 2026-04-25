@@ -4,6 +4,7 @@
 .chrome-profile-local*/
 .chrome-profile-verify*/
 .chrome-shot*/
+.chrome-perf-*/
 .edge-headless-verify/
 .claude/
 __pycache__/

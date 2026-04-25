@@ -1264,6 +1264,21 @@ def fetch_quote_snapshot_payload(as_of_date: str) -> bytes | None:
         "db_path": str(DB_FILE),
         "count": count,
     }
+    if quotes_json.lstrip().startswith("[["):
+        meta["fields"] = [
+            "symbol",
+            "name",
+            "market",
+            "open",
+            "high",
+            "low",
+            "close",
+            "change",
+            "pct",
+            "volumeRatio",
+            "volume",
+            "amount",
+        ]
     prefix = json.dumps(meta, ensure_ascii=False)[:-1] + ',"quotes":'
     return (prefix + quotes_json + "}").encode("utf-8")
 

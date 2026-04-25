@@ -473,9 +473,33 @@ select:focus {
 
 .market-table {
   width: 100%;
-  min-width: 1100px;
-  border-collapse: collapse;
+  min-width: 1214px;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
+}
+
+.market-table thead,
+.market-table tbody {
+  display: block;
+}
+
+.market-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.market-table thead tr,
+.market-table tbody tr {
+  display: grid;
+  grid-template-columns: 48px 88px 140px 68px 82px 76px 76px 82px 82px 82px 82px 100px 112px 96px;
+  width: 100%;
+  min-width: 1214px;
+}
+
+.market-table tbody {
+  position: relative;
 }
 
 .market-table th,
@@ -484,12 +508,11 @@ select:focus {
   padding: 0 9px;
   border-bottom: 1px solid #151b22;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .market-table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   color: var(--muted);
   background: #111820;
   text-align: right;
@@ -510,7 +533,11 @@ select:focus {
 }
 
 .market-table tbody tr {
+  position: absolute;
+  left: 0;
+  right: 0;
   cursor: default;
+  will-change: transform;
 }
 
 .market-table tbody tr:hover,

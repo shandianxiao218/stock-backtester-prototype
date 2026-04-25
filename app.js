@@ -69,6 +69,8 @@
 
   let stocks = [];
   let quoteRows = [];
+  let quoteVersion = 0;
+  let quoteBySymbol = new Map();
   let loadSeq = 0;
 
   const marketData = new Map();
@@ -132,6 +134,23 @@
     latestIndicators: null
   };
 
+  const marketTableState = {
+    rows: [],
+    rowHeight: 30,
+    overscan: 2,
+    scheduled: false,
+    start: 0,
+    end: 0
+  };
+
+  const quoteViewCache = {
+    version: -1,
+    sortKey: "",
+    sortDir: "",
+    search: "",
+    rows: []
+  };
+
   const el = {
     marketStatus: document.getElementById("marketStatus"),
     marketStrip: document.getElementById("marketStrip"),
@@ -141,6 +160,7 @@
     quoteList: document.getElementById("quoteList"),
     marketBoard: document.getElementById("marketBoard"),
     detailBoard: document.getElementById("detailBoard"),
+    marketTableWrap: document.querySelector(".market-table-wrap"),
     marketTableBody: document.getElementById("marketTableBody"),
     quoteCount: document.getElementById("quoteCount"),
     backToMarket: document.getElementById("backToMarket"),
@@ -242,6 +262,7 @@
 
     el.stockSearch.addEventListener("input", (event) => {
       state.search = event.target.value.trim().toLowerCase();
+      if (el.marketTableWrap) el.marketTableWrap.scrollTop = 0;
       renderQuotes();
       renderMarketTable();
     });
@@ -254,6 +275,22 @@
     document.querySelectorAll(".market-table th[data-sort]").forEach((cell) => {
       cell.addEventListener("click", () => setQuoteSort(cell.dataset.sort));
     });
+
+    if (el.marketTableWrap) {
+      el.marketTableWrap.addEventListener("scroll", scheduleMarketRowsRender, { passive: true });
+    }
+    if (el.marketTableBody) {
+      el.marketTableBody.addEventListener("click", (event) => {
+        const row = event.target.closest("tr[data-symbol]");
+        if (!row) return;
+        state.symbol = row.dataset.symbol;
+        renderHeader();
+      });
+      el.marketTableBody.addEventListener("dblclick", (event) => {
+        const row = event.target.closest("tr[data-symbol]");
+        if (row) openSymbol(row.dataset.symbol);
+      });
+    }
 
     el.showMA.addEventListener("change", () => {
       state.showMA = el.showMA.checked;
@@ -372,7 +409,10 @@
       const payload = await fetchQuotes();
       if (sequence !== loadSeq) return;
       quoteRows = payload.quotes || [];
-      if (quoteRows.length) {
+      quoteVersion += 1;
+      quoteBySymbol = new Map();
+      quoteRows.forEach((quote) => quoteBySymbol.set(quote.symbol, quote));
+      if (quoteRows.length && stocks.length !== quoteRows.length) {
         stocks = quoteRows.map((quote) => ({ symbol: quote.symbol, name: quote.name, market: quote.market }));
       }
       if (!stocks.some((stock) => stock.symbol === state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
@@ -403,15 +443,43 @@
       market: "all"
     });
     const payload = await fetchJson(`/api/quotes?${params.toString()}`);
-    if (payload.trade_date && Array.isArray(payload.quotes)) {
-      payload.quotes.forEach((quote) => {
-        if (!quote.date) quote.date = payload.trade_date;
-        if (typeof quote.suspended !== "boolean") quote.suspended = false;
-      });
-    }
+    payload.quotes = normalizeQuoteRows(payload);
     quoteCache.set(key, payload);
     perfEnd(t);
     return payload;
+  }
+
+  function normalizeQuoteRows(payload) {
+    const tradeDate = payload.trade_date || payload.as_of_date || state.asOfDate;
+    const rows = Array.isArray(payload.quotes) ? payload.quotes : [];
+    const fields = Array.isArray(payload.fields) ? payload.fields : null;
+    const normalized = fields
+      ? rows.map((row, index) => {
+          return {
+            symbol: row[0],
+            name: row[1],
+            market: row[2],
+            open: row[3],
+            high: row[4],
+            low: row[5],
+            close: row[6],
+            change: row[7],
+            pct: row[8],
+            volumeRatio: row[9],
+            volume: row[10],
+            amount: row[11],
+            date: tradeDate,
+            suspended: false,
+            _rank: index
+          };
+        })
+      : rows.map((quote, index) => {
+          if (!quote.date) quote.date = tradeDate;
+          if (typeof quote.suspended !== "boolean") quote.suspended = false;
+          quote._rank = index;
+          return quote;
+        });
+    return normalized;
   }
 
   async function fetchBars(symbol) {
@@ -536,23 +604,57 @@
       perfEnd(t);
       return;
     }
-    const rows = sortedQuotes().filter((quote) => {
-      const key = `${quote.symbol} ${quote.name}`.toLowerCase();
-      return !state.search || key.includes(state.search);
-    });
+    const rows = filteredSortedQuotes();
+    marketTableState.rows = rows;
+    marketTableState.start = -1;
+    marketTableState.end = -1;
     if (el.quoteCount) {
       el.quoteCount.textContent = `${rows.length} / ${quoteRows.length} 只 · 双击进入 K 线`;
     }
+    renderMarketVisibleRows();
+    perfEnd(t);
+  }
 
-    // 使用 DocumentFragment 批量插入，减少重排
-    const fragment = document.createDocumentFragment();
-    rows.forEach((quote, index) => {
-      const tr = document.createElement("tr");
-      if (quote.symbol === state.symbol) tr.classList.add("active");
-      tr.dataset.symbol = quote.symbol;
-      const cls = quote.change > 0 ? "up" : quote.change < 0 ? "down" : "flat";
-      const volCls = quote.volumeRatio > 1 ? "up" : quote.volumeRatio < 0.8 ? "down" : "flat";
-      tr.innerHTML = `
+  function scheduleMarketRowsRender() {
+    if (marketTableState.scheduled) return;
+    marketTableState.scheduled = true;
+    requestAnimationFrame(() => {
+      marketTableState.scheduled = false;
+      renderMarketVisibleRows();
+    });
+  }
+
+  function renderMarketVisibleRows() {
+    if (!el.marketTableBody) return;
+    const rows = marketTableState.rows;
+    const rowHeight = marketTableState.rowHeight;
+    const wrap = el.marketTableWrap;
+    const scrollTop = wrap ? wrap.scrollTop : 0;
+    const viewportHeight = wrap ? wrap.clientHeight : 720;
+    const visibleCount = Math.ceil(viewportHeight / rowHeight) + marketTableState.overscan * 2;
+    const maxStart = Math.max(0, rows.length - visibleCount);
+    const start = Math.min(maxStart, Math.max(0, Math.floor(scrollTop / rowHeight) - marketTableState.overscan));
+    const end = Math.min(rows.length, start + visibleCount);
+    if (start === marketTableState.start && end === marketTableState.end && el.marketTableBody.childElementCount) return;
+
+    marketTableState.start = start;
+    marketTableState.end = end;
+    el.marketTableBody.style.height = `${rows.length * rowHeight}px`;
+    el.marketTableBody.innerHTML = rows
+      .slice(start, end)
+      .map((quote, offset) => quoteRowHtml(quote, start + offset))
+      .join("");
+    if (el.quoteCount) {
+      const range = rows.length ? `${start + 1}-${end}` : "0";
+      el.quoteCount.textContent = `${rows.length} / ${quoteRows.length} 只 · 当前 ${range}`;
+    }
+  }
+
+  function quoteRowHtml(quote, index) {
+    const cls = quote.change > 0 ? "up" : quote.change < 0 ? "down" : "flat";
+    const volCls = quote.volumeRatio > 1 ? "up" : quote.volumeRatio < 0.8 ? "down" : "flat";
+    return `
+        <tr class="${quote.symbol === state.symbol ? "active" : ""}" data-symbol="${quote.symbol}" style="transform:translateY(${index * marketTableState.rowHeight}px)">
         <td class="muted">${index + 1}</td>
         <td><strong>${quote.symbol}</strong></td>
         <td>${escapeHtml(quote.name)}${quote.suspended ? '<span class="muted"> 停</span>' : ""}</td>
@@ -567,25 +669,8 @@
         <td class="num">${formatCompact(quote.volume)}</td>
         <td class="num">${formatMoneyCompact(quote.amount)}</td>
         <td class="muted">${quote.date}</td>
-      `;
-      fragment.appendChild(tr);
-    });
-    el.marketTableBody.innerHTML = "";
-    el.marketTableBody.appendChild(fragment);
-
-    // 使用事件委托，减少事件监听器数量
-    el.marketTableBody.onclick = (e) => {
-      const row = e.target.closest("tr[data-symbol]");
-      if (row) {
-        state.symbol = row.dataset.symbol;
-        renderHeader();
-      }
-    };
-    el.marketTableBody.ondblclick = (e) => {
-      const row = e.target.closest("tr[data-symbol]");
-      if (row) openSymbol(row.dataset.symbol);
-    };
-    perfEnd(t);
+      </tr>
+    `;
   }
 
   function renderMarketStrip() {
@@ -615,12 +700,7 @@
 
   function renderQuotes() {
     const t = perfStart("renderQuotes");
-    const filtered = sortedQuotes()
-      .filter((quote) => {
-      const key = `${quote.symbol} ${quote.name}`.toLowerCase();
-      return !state.search || key.includes(state.search);
-      })
-      .slice(0, 180);
+    const filtered = filteredSortedQuotes().slice(0, 40);
 
     el.quoteList.innerHTML = filtered
       .map((quote) => {
@@ -2033,21 +2113,44 @@
   }
 
   function getQuote(symbol) {
-    return quoteRows.find((quote) => quote.symbol === symbol);
+    return quoteBySymbol.get(symbol);
   }
 
   function sortedQuotes() {
+    return filteredSortedQuotes();
+  }
+
+  function filteredSortedQuotes() {
     const { key, dir } = state.quoteSort;
+    if (
+      quoteViewCache.version === quoteVersion &&
+      quoteViewCache.sortKey === key &&
+      quoteViewCache.sortDir === dir &&
+      quoteViewCache.search === state.search
+    ) {
+      return quoteViewCache.rows;
+    }
     const multiplier = dir === "asc" ? 1 : -1;
-    return quoteRows.slice().sort((a, b) => {
-      if (key === "rank") return multiplier * ((quoteRows.indexOf(a) + 1) - (quoteRows.indexOf(b) + 1));
-      const av = a[key];
-      const bv = b[key];
-      if (typeof av === "number" || typeof bv === "number") {
-        return multiplier * ((Number(av) || 0) - (Number(bv) || 0));
-      }
-      return multiplier * String(av || "").localeCompare(String(bv || ""), "zh-CN");
-    });
+    const rows = quoteRows
+      .filter((quote) => {
+        const searchKey = `${quote.symbol} ${quote.name}`.toLowerCase();
+        return !state.search || searchKey.includes(state.search);
+      })
+      .sort((a, b) => {
+        if (key === "rank") return multiplier * ((a._rank || 0) - (b._rank || 0));
+        const av = a[key];
+        const bv = b[key];
+        if (typeof av === "number" || typeof bv === "number") {
+          return multiplier * ((Number(av) || 0) - (Number(bv) || 0));
+        }
+        return multiplier * String(av || "").localeCompare(String(bv || ""), "zh-CN");
+      });
+    quoteViewCache.version = quoteVersion;
+    quoteViewCache.sortKey = key;
+    quoteViewCache.sortDir = dir;
+    quoteViewCache.search = state.search;
+    quoteViewCache.rows = rows;
+    return rows;
   }
 
   function setQuoteSort(key) {
@@ -2057,6 +2160,7 @@
     } else {
       state.quoteSort = { key, dir: key === "symbol" || key === "name" || key === "market" ? "asc" : "desc" };
     }
+    if (el.marketTableWrap) el.marketTableWrap.scrollTop = 0;
     renderQuotes();
     renderMarketTable();
   }
@@ -2108,10 +2212,10 @@
 
   function formatCompact(value) {
     if (!Number.isFinite(value)) return "--";
-    return Number(value).toLocaleString("zh-CN", {
-      notation: "compact",
-      maximumFractionDigits: 2
-    });
+    const abs = Math.abs(value);
+    if (abs >= 100000000) return `${trimFixed(value / 100000000, 2)}亿`;
+    if (abs >= 10000) return `${trimFixed(value / 10000, 2)}万`;
+    return String(Math.round(value));
   }
 
   function formatMoneyCompact(value) {
@@ -2124,6 +2228,10 @@
 
   function formatRatio(value) {
     return Number.isFinite(value) ? value.toFixed(2) : "--";
+  }
+
+  function trimFixed(value, digits) {
+    return value.toFixed(digits).replace(/\.?0+$/, "");
   }
 
   function currency(value) {
