@@ -355,6 +355,10 @@ input:focus {
   font-size: 12px;
 }
 
+.segment.wide {
+  min-width: 76px;
+}
+
 .segment:last-child {
   border-right: 0;
 }

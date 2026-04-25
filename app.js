@@ -23,7 +23,7 @@
   const state = {
     symbol: "000001",
     currentIndex: Math.min(148, tradingDays.length - 1),
-    panel: "macd",
+    panel: initialPanel(),
     showMA: true,
     showBOLL: false,
     trades: [],
@@ -68,6 +68,7 @@
     el.backtestDate.max = tradingDays[tradingDays.length - 1];
     el.backtestDate.value = tradingDays[state.currentIndex];
 
+    syncPanelButtons();
     bindEvents();
     renderAll();
   }
@@ -105,7 +106,8 @@
     document.querySelectorAll(".segment").forEach((button) => {
       button.addEventListener("click", () => {
         state.panel = button.dataset.panel;
-        document.querySelectorAll(".segment").forEach((item) => item.classList.toggle("active", item === button));
+        window.location.hash = state.panel;
+        syncPanelButtons();
         renderCharts();
       });
     });
@@ -432,7 +434,35 @@
       drawLegend(ctx, ["K", "D", "J"], ["#e2b34b", "#5ea1ff", "#b884ff"], pad.left, 13);
     }
 
-    drawAxisText(ctx, panel.toUpperCase(), width - pad.right - 6, 13, "#d7dde5", "right");
+    if (panel === "dmi") {
+      const y = (value) => pad.top + ((100 - value) / 100) * plotH;
+      line(ctx, pad.left, y(50), width - pad.right, y(50), "rgba(127,138,153,0.26)");
+      line(ctx, pad.left, y(25), width - pad.right, y(25), "rgba(127,138,153,0.18)");
+      drawSeries(ctx, indicators.pdi, range, pad, plotW, y, "#e05252", barW);
+      drawSeries(ctx, indicators.mdi, range, pad, plotW, y, "#20b26b", barW);
+      drawSeries(ctx, indicators.adx, range, pad, plotW, y, "#e2b34b", barW);
+      drawSeries(ctx, indicators.adxr, range, pad, plotW, y, "#5ea1ff", barW);
+      drawAxisText(ctx, "50", width - pad.right + 10, y(50) + 4, "#7f8a99", "left");
+      drawAxisText(ctx, "25", width - pad.right + 10, y(25) + 4, "#7f8a99", "left");
+      drawLegend(ctx, ["PDI", "MDI", "ADX", "ADXR"], ["#e05252", "#20b26b", "#e2b34b", "#5ea1ff"], pad.left, 13);
+    }
+
+    if (panel === "capital") {
+      const y = (value) => pad.top + ((100 - value) / 200) * plotH;
+      line(ctx, pad.left, y(0), width - pad.right, y(0), "#394450");
+      line(ctx, pad.left, y(50), width - pad.right, y(50), "rgba(224,82,82,0.22)");
+      line(ctx, pad.left, y(-50), width - pad.right, y(-50), "rgba(32,178,107,0.22)");
+      drawSeries(ctx, indicators.superFund, range, pad, plotW, y, "#e05252", barW);
+      drawSeries(ctx, indicators.largeFund, range, pad, plotW, y, "#e2b34b", barW);
+      drawSeries(ctx, indicators.middleFund, range, pad, plotW, y, "#5ea1ff", barW);
+      drawSeries(ctx, indicators.retailFund, range, pad, plotW, y, "#20b26b", barW);
+      drawAxisText(ctx, "+50", width - pad.right + 10, y(50) + 4, "#7f8a99", "left");
+      drawAxisText(ctx, "0", width - pad.right + 10, y(0) + 4, "#7f8a99", "left");
+      drawAxisText(ctx, "-50", width - pad.right + 10, y(-50) + 4, "#7f8a99", "left");
+      drawLegend(ctx, ["超大", "大户", "中户", "散户"], ["#e05252", "#e2b34b", "#5ea1ff", "#20b26b"], pad.left, 13);
+    }
+
+    drawAxisText(ctx, panelTitle(panel), width - pad.right - 6, 13, "#d7dde5", "right");
   }
 
   function prepareCanvas(canvas) {
@@ -637,6 +667,8 @@
     const closes = bars.map((bar) => bar.close);
     const highs = bars.map((bar) => bar.high);
     const lows = bars.map((bar) => bar.low);
+    const opens = bars.map((bar) => bar.open);
+    const volumes = bars.map((bar) => bar.volume);
     const ma5 = sma(closes, 5);
     const ma10 = sma(closes, 10);
     const ma20 = sma(closes, 20);
@@ -652,8 +684,33 @@
     const rsi6 = rsi(closes, 6);
     const rsi12 = rsi(closes, 12);
     const { k, d, j } = kdj(highs, lows, closes, 9);
+    const { pdi, mdi, adx, adxr } = dmi(highs, lows, closes, 14, 6);
+    const { superFund, largeFund, middleFund, retailFund } = capitalGame(opens, highs, lows, closes, volumes, 13);
 
-    return { ma5, ma10, ma20, bollMid, bollUpper, bollLower, macd, signal, hist, rsi6, rsi12, k, d, j };
+    return {
+      ma5,
+      ma10,
+      ma20,
+      bollMid,
+      bollUpper,
+      bollLower,
+      macd,
+      signal,
+      hist,
+      rsi6,
+      rsi12,
+      k,
+      d,
+      j,
+      pdi,
+      mdi,
+      adx,
+      adxr,
+      superFund,
+      largeFund,
+      middleFund,
+      retailFund
+    };
   }
 
   function sma(values, period) {
@@ -727,6 +784,131 @@
     }
 
     return { k, d, j };
+  }
+
+  function dmi(highs, lows, closes, period, adxPeriod) {
+    const tr = Array(closes.length).fill(NaN);
+    const plusDM = Array(closes.length).fill(0);
+    const minusDM = Array(closes.length).fill(0);
+
+    for (let i = 1; i < closes.length; i += 1) {
+      const highMove = highs[i] - highs[i - 1];
+      const lowMove = lows[i - 1] - lows[i];
+      tr[i] = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+      plusDM[i] = highMove > lowMove && highMove > 0 ? highMove : 0;
+      minusDM[i] = lowMove > highMove && lowMove > 0 ? lowMove : 0;
+    }
+
+    const trRma = rma(tr, period);
+    const plusRma = rma(plusDM, period);
+    const minusRma = rma(minusDM, period);
+    const pdi = closes.map((_, index) => (trRma[index] > 0 ? (plusRma[index] / trRma[index]) * 100 : NaN));
+    const mdi = closes.map((_, index) => (trRma[index] > 0 ? (minusRma[index] / trRma[index]) * 100 : NaN));
+    const dx = closes.map((_, index) => {
+      const total = pdi[index] + mdi[index];
+      return total > 0 ? (Math.abs(pdi[index] - mdi[index]) / total) * 100 : NaN;
+    });
+    const adx = rma(dx, adxPeriod);
+    const adxr = adx.map((value, index) => (index >= adxPeriod && Number.isFinite(value) ? (value + adx[index - adxPeriod]) / 2 : NaN));
+
+    return { pdi, mdi, adx, adxr };
+  }
+
+  function capitalGame(opens, highs, lows, closes, volumes, period) {
+    const money = closes.map((close, index) => close * volumes[index]);
+    const avgMoney = sma(money, period);
+    const superRaw = [];
+    const largeRaw = [];
+    const middleRaw = [];
+    const retailRaw = [];
+
+    for (let i = 0; i < closes.length; i += 1) {
+      if (i === 0) {
+        superRaw.push(0);
+        largeRaw.push(0);
+        middleRaw.push(0);
+        retailRaw.push(0);
+        continue;
+      }
+
+      const range = Math.max(highs[i] - lows[i], closes[i] * 0.002);
+      const priceChange = (closes[i] - closes[i - 1]) / closes[i - 1];
+      const closeLocation = ((closes[i] - lows[i]) / range - 0.5) * 2;
+      const bodyPower = (closes[i] - opens[i]) / range;
+      const volumeRatio = avgMoney[i] > 0 ? clamp(money[i] / avgMoney[i], 0.55, 2.2) : 1;
+      const force = clamp(priceChange * 18 + closeLocation * 0.34 + bodyPower * 0.42, -1, 1);
+      const turnover = money[i] * volumeRatio;
+      const activeFlow = turnover * force;
+      const impulse = Math.max(0, volumeRatio - 1) * Math.sign(force) * turnover * 0.16;
+
+      superRaw.push(activeFlow * 0.42 + impulse);
+      largeRaw.push(activeFlow * 0.28);
+      middleRaw.push(activeFlow * 0.12 - impulse * 0.35);
+      retailRaw.push(-activeFlow * 0.34 - impulse * 0.65);
+    }
+
+    return {
+      superFund: normalizeFundLine(superRaw, money, period),
+      largeFund: normalizeFundLine(largeRaw, money, period),
+      middleFund: normalizeFundLine(middleRaw, money, period),
+      retailFund: normalizeFundLine(retailRaw, money, period)
+    };
+  }
+
+  function normalizeFundLine(flows, money, period) {
+    const flowSum = rollingSum(flows, period);
+    const moneySum = rollingSum(money, period);
+    return flows.map((_, index) => {
+      if (!Number.isFinite(flowSum[index]) || !Number.isFinite(moneySum[index]) || moneySum[index] === 0) return NaN;
+      return clamp((flowSum[index] / moneySum[index]) * 220, -100, 100);
+    });
+  }
+
+  function rollingSum(values, period) {
+    return values.map((_, index) => {
+      if (index < period - 1) return NaN;
+      let sum = 0;
+      for (let i = index - period + 1; i <= index; i += 1) sum += Number.isFinite(values[i]) ? values[i] : 0;
+      return sum;
+    });
+  }
+
+  function rma(values, period) {
+    const output = Array(values.length).fill(NaN);
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < values.length; i += 1) {
+      const value = Number.isFinite(values[i]) ? values[i] : 0;
+      if (count < period) {
+        sum += value;
+        count += 1;
+        if (count === period) output[i] = sum / period;
+      } else {
+        output[i] = (output[i - 1] * (period - 1) + value) / period;
+      }
+    }
+    return output;
+  }
+
+  function panelTitle(panel) {
+    const titles = {
+      macd: "MACD",
+      rsi: "RSI",
+      kdj: "KDJ",
+      dmi: "DMI",
+      capital: "资金博弈"
+    };
+    return titles[panel] || panel.toUpperCase();
+  }
+
+  function initialPanel() {
+    const panels = ["macd", "rsi", "kdj", "dmi", "capital"];
+    const hash = window.location.hash.replace("#", "").toLowerCase();
+    return panels.includes(hash) ? hash : "macd";
+  }
+
+  function syncPanelButtons() {
+    document.querySelectorAll(".segment").forEach((item) => item.classList.toggle("active", item.dataset.panel === state.panel));
   }
 
   function createTradingDays(start, end) {
