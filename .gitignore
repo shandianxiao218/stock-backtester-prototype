@@ -1,1 +1,15 @@
 .chrome-profile/
+.chrome-headless-verify/
+.chrome-profile-check*/
+.chrome-profile-local*/
+.chrome-profile-verify*/
+.chrome-shot*/
+.edge-headless-verify/
+__pycache__/
+data/sessions.json
+data/sessions.json.tmp
+verify-dom.html
+verify-screenshot*.png
+server-*.log
+chrome-check.err.log
+edge-check.err.log
