@@ -1,6 +1,56 @@
 (function () {
   "use strict";
 
+  // 性能计时工具 - 写入日志文件
+  const perfTimings = [];
+  let perfFlushPending = false;
+
+  function perfStart(label) {
+    return { label, start: performance.now() };
+  }
+
+  function perfEnd(timer) {
+    const duration = performance.now() - timer.start;
+    perfTimings.push({ label: timer.label, duration: Math.round(duration * 100) / 100 });
+
+    // 每10条或者超过100ms的操作立即刷写
+    if (perfTimings.length >= 10 || duration > 100) {
+      schedulePerfFlush();
+    }
+    return duration;
+  }
+
+  function schedulePerfFlush() {
+    if (perfFlushPending) return;
+    perfFlushPending = true;
+    setTimeout(() => {
+      flushPerfLog();
+    }, 100); // 批量刷写，避免频繁请求
+  }
+
+  async function flushPerfLog() {
+    perfFlushPending = false;
+    if (perfTimings.length === 0) return;
+
+    const entries = perfTimings.splice(0);
+    try {
+      await fetch("/api/perf-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries })
+      });
+    } catch (e) {
+      // 静默失败，不影响主流程
+    }
+  }
+
+  // 页面卸载时刷写剩余日志
+  window.addEventListener("beforeunload", () => {
+    if (perfTimings.length > 0) {
+      navigator.sendBeacon("/api/perf-log", JSON.stringify({ entries: perfTimings }));
+    }
+  });
+
   const INITIAL_CASH = 100000;
   const DEFAULT_DISPLAY_BARS = 90;
   const MIN_DISPLAY_BARS = 30;
@@ -312,6 +362,7 @@
 
   async function loadMarketData() {
     if (!stocks.length) return;
+    const t = perfStart(`loadMarketData(asOf=${state.asOfDate})`);
     const sequence = ++loadSeq;
     state.loading = true;
     setBusy(true);
@@ -337,23 +388,39 @@
         setBusy(false);
       }
     }
+    perfEnd(t);
   }
 
   async function fetchQuotes() {
+    const t = perfStart(`fetchQuotes(${state.asOfDate})`);
     const key = `quotes|${state.asOfDate}`;
-    if (quoteCache.has(key)) return quoteCache.get(key);
+    if (quoteCache.has(key)) {
+      perfEnd(t);
+      return quoteCache.get(key);
+    }
     const params = new URLSearchParams({
       as_of_date: state.asOfDate,
       market: "all"
     });
     const payload = await fetchJson(`/api/quotes?${params.toString()}`);
+    if (payload.trade_date && Array.isArray(payload.quotes)) {
+      payload.quotes.forEach((quote) => {
+        if (!quote.date) quote.date = payload.trade_date;
+        if (typeof quote.suspended !== "boolean") quote.suspended = false;
+      });
+    }
     quoteCache.set(key, payload);
+    perfEnd(t);
     return payload;
   }
 
   async function fetchBars(symbol) {
+    const t = perfStart(`fetchBars(${symbol})`);
     const key = `${symbol}|${state.asOfDate}|qfq`;
-    if (dataCache.has(key)) return dataCache.get(key);
+    if (dataCache.has(key)) {
+      perfEnd(t);
+      return dataCache.get(key);
+    }
     const params = new URLSearchParams({
       symbol,
       as_of_date: state.asOfDate,
@@ -362,15 +429,22 @@
     });
     const payload = await fetchJson(`/api/bars?${params.toString()}`);
     dataCache.set(key, payload);
+    perfEnd(t);
     return payload;
   }
 
   async function ensureSymbolBars(symbol) {
-    if (marketData.has(symbol)) return marketData.get(symbol);
+    const t = perfStart(`ensureSymbolBars(${symbol})`);
+    const key = `${symbol}|${state.asOfDate}`;
+    if (marketData.has(key)) {
+      perfEnd(t);
+      return marketData.get(key);
+    }
     const payload = await fetchBars(symbol);
-    marketData.set(symbol, payload.bars || []);
+    marketData.set(key, payload.bars || []);
     const stock = getStock(symbol);
     if (payload.name && stock) stock.name = payload.name;
+    perfEnd(t);
     return payload.bars || [];
   }
 
@@ -420,15 +494,17 @@
       renderAll();
       return;
     }
+    const t = perfStart(`setAsOfDate(${date})`);
     state.asOfDate = date;
     if (options.branch) branchTimeline();
     stopPlayback();
-    marketData.clear();
     await loadMarketData();
     renderAll();
+    perfEnd(t);
   }
 
   function renderAll() {
+    const t = perfStart("renderAll");
     el.backtestDate.value = state.asOfDate;
     el.visibleDateTag.textContent = currentTradingDate() || state.asOfDate;
     el.marketStatus.textContent = `东方财富本地行情 · 服务端截断至 ${state.asOfDate}`;
@@ -442,6 +518,7 @@
     renderAccount();
     renderSessions();
     renderCharts();
+    perfEnd(t);
   }
 
   function renderView() {
@@ -454,7 +531,11 @@
   }
 
   function renderMarketTable() {
-    if (!el.marketTableBody) return;
+    const t = perfStart("renderMarketTable");
+    if (!el.marketTableBody) {
+      perfEnd(t);
+      return;
+    }
     const rows = sortedQuotes().filter((quote) => {
       const key = `${quote.symbol} ${quote.name}`.toLowerCase();
       return !state.search || key.includes(state.search);
@@ -462,37 +543,49 @@
     if (el.quoteCount) {
       el.quoteCount.textContent = `${rows.length} / ${quoteRows.length} 只 · 双击进入 K 线`;
     }
-    el.marketTableBody.innerHTML = rows
-      .map((quote, index) => {
-        const cls = quote.change > 0 ? "up" : quote.change < 0 ? "down" : "flat";
-        return `
-          <tr class="${quote.symbol === state.symbol ? "active" : ""}" data-symbol="${quote.symbol}">
-            <td class="muted">${index + 1}</td>
-            <td><strong>${quote.symbol}</strong></td>
-            <td>${escapeHtml(quote.name)}${quote.suspended ? '<span class="muted"> 停</span>' : ""}</td>
-            <td class="muted">${quote.market}</td>
-            <td class="num ${cls}">${formatPrice(quote.close)}</td>
-            <td class="num ${quote.volumeRatio > 1 ? "up" : quote.volumeRatio < 0.8 ? "down" : "flat"}">${formatRatio(quote.volumeRatio)}</td>
-            <td class="num ${cls}">${quote.pct >= 0 ? "+" : ""}${quote.pct.toFixed(2)}</td>
-            <td class="num ${cls}">${quote.change >= 0 ? "+" : ""}${formatPrice(quote.change)}</td>
-            <td class="num">${formatPrice(quote.open)}</td>
-            <td class="num up">${formatPrice(quote.high)}</td>
-            <td class="num down">${formatPrice(quote.low)}</td>
-            <td class="num">${formatCompact(quote.volume)}</td>
-            <td class="num">${formatMoneyCompact(quote.amount)}</td>
-            <td class="muted">${quote.date}</td>
-          </tr>
-        `;
-      })
-      .join("");
 
-    el.marketTableBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
-      row.addEventListener("click", () => {
+    // 使用 DocumentFragment 批量插入，减少重排
+    const fragment = document.createDocumentFragment();
+    rows.forEach((quote, index) => {
+      const tr = document.createElement("tr");
+      if (quote.symbol === state.symbol) tr.classList.add("active");
+      tr.dataset.symbol = quote.symbol;
+      const cls = quote.change > 0 ? "up" : quote.change < 0 ? "down" : "flat";
+      const volCls = quote.volumeRatio > 1 ? "up" : quote.volumeRatio < 0.8 ? "down" : "flat";
+      tr.innerHTML = `
+        <td class="muted">${index + 1}</td>
+        <td><strong>${quote.symbol}</strong></td>
+        <td>${escapeHtml(quote.name)}${quote.suspended ? '<span class="muted"> 停</span>' : ""}</td>
+        <td class="muted">${quote.market}</td>
+        <td class="num ${cls}">${formatPrice(quote.close)}</td>
+        <td class="num ${volCls}">${formatRatio(quote.volumeRatio)}</td>
+        <td class="num ${cls}">${quote.pct >= 0 ? "+" : ""}${quote.pct.toFixed(2)}</td>
+        <td class="num ${cls}">${quote.change >= 0 ? "+" : ""}${formatPrice(quote.change)}</td>
+        <td class="num">${formatPrice(quote.open)}</td>
+        <td class="num up">${formatPrice(quote.high)}</td>
+        <td class="num down">${formatPrice(quote.low)}</td>
+        <td class="num">${formatCompact(quote.volume)}</td>
+        <td class="num">${formatMoneyCompact(quote.amount)}</td>
+        <td class="muted">${quote.date}</td>
+      `;
+      fragment.appendChild(tr);
+    });
+    el.marketTableBody.innerHTML = "";
+    el.marketTableBody.appendChild(fragment);
+
+    // 使用事件委托，减少事件监听器数量
+    el.marketTableBody.onclick = (e) => {
+      const row = e.target.closest("tr[data-symbol]");
+      if (row) {
         state.symbol = row.dataset.symbol;
         renderHeader();
-      });
-      row.addEventListener("dblclick", () => openSymbol(row.dataset.symbol));
-    });
+      }
+    };
+    el.marketTableBody.ondblclick = (e) => {
+      const row = e.target.closest("tr[data-symbol]");
+      if (row) openSymbol(row.dataset.symbol);
+    };
+    perfEnd(t);
   }
 
   function renderMarketStrip() {
@@ -521,6 +614,7 @@
   }
 
   function renderQuotes() {
+    const t = perfStart("renderQuotes");
     const filtered = sortedQuotes()
       .filter((quote) => {
       const key = `${quote.symbol} ${quote.name}`.toLowerCase();
@@ -556,6 +650,7 @@
       });
       row.addEventListener("dblclick", () => openSymbol(row.dataset.symbol));
     });
+    perfEnd(t);
   }
 
   function renderHeader() {
@@ -719,7 +814,11 @@
   }
 
   function renderCharts() {
-    if (state.view !== "detail") return;
+    const t = perfStart("renderCharts");
+    if (state.view !== "detail") {
+      perfEnd(t);
+      return;
+    }
     const bars = currentBars();
     if (!bars.length) {
       clearCanvas(el.priceCanvas);
@@ -727,6 +826,7 @@
       el.indicatorCanvases.forEach(clearCanvas);
       chartState.range = null;
       chartState.priceScale = null;
+      perfEnd(t);
       return;
     }
 
@@ -744,6 +844,7 @@
       const panelIndicators = calculateIndicators(bars, indicatorSettingsForPanel(panel));
       drawIndicatorChart(canvas, bars, panelIndicators, range, panel);
     });
+    perfEnd(t);
   }
 
   function drawPriceChart(canvas, bars, indicators, range) {
@@ -1277,7 +1378,6 @@
     if (step < 0) {
       if (!bars.length) {
         state.asOfDate = shiftCalendarDays(originalAsOf, -1);
-        marketData.clear();
         await loadMarketData();
         renderAll();
         return true;
@@ -1285,7 +1385,6 @@
       if (bars.length < 2) return false;
       state.asOfDate = bars[bars.length - 2].date;
       branchTimeline();
-      marketData.clear();
       await loadMarketData();
       renderAll();
       return true;
@@ -1295,7 +1394,6 @@
       const nextDate = shiftCalendarDays(originalAsOf, 1);
       if (nextDate > todayString()) return false;
       state.asOfDate = nextDate;
-      marketData.clear();
       await loadMarketData();
       renderAll();
       return true;
@@ -1305,7 +1403,6 @@
       const nextDate = shiftCalendarDays(originalAsOf, offset);
       if (nextDate > todayString()) break;
       state.asOfDate = nextDate;
-      marketData.clear();
       await loadMarketData();
       const nextTradingDate = currentTradingDate();
       if (nextTradingDate && nextTradingDate !== originalTradingDate && nextTradingDate > originalTradingDate) {
@@ -1316,7 +1413,6 @@
     }
 
     state.asOfDate = originalAsOf;
-    marketData.clear();
     await loadMarketData();
     renderAll();
     return false;
@@ -1407,7 +1503,6 @@
       state.trades = session.trades || [];
       state.drawings = session.drawings || [];
       if (session.settings) applySettings(session.settings);
-      marketData.clear();
       await loadMarketData();
       renderAll();
       flashButton(el.loadSession, "已加载");
@@ -1913,7 +2008,8 @@
   }
 
   function currentBars() {
-    return marketData.get(state.symbol) || [];
+    const key = `${state.symbol}|${state.asOfDate}`;
+    return marketData.get(key) || [];
   }
 
   function currentTradingDate() {
@@ -1924,7 +2020,8 @@
   }
 
   function latestClose(symbol) {
-    const bars = marketData.get(symbol) || [];
+    const key = `${symbol}|${state.asOfDate}`;
+    const bars = marketData.get(key) || [];
     const bar = bars[bars.length - 1];
     if (bar) return bar.close;
     const quote = getQuote(symbol);
