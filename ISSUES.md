@@ -213,3 +213,13 @@ Status: done
 - [x] Prevent background `/api/stocks` refresh from resetting the currently opened index symbol.
 - [x] Add static asset version query strings to avoid stale cached `app.js` / `styles.css`.
 - [x] Browser-verify index cards, index K-line jump, default indicators, crosshair readout, and wheel stock navigation.
+
+# 2026-04-26 Compact K-Line Top Readout
+
+Status: done
+
+## TODO
+- [x] Remove MA, RSI, MACD, DMI, and Capital Game cells from the top K-line readout.
+- [x] Keep only date, open, high, low, close, percent change, and volume in the top readout.
+- [x] Keep indicator hover values inside each subchart so the main chart area is not pushed down.
+- [x] Bump static asset version query strings to avoid stale cached JavaScript.

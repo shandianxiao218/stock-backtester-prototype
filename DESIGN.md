@@ -325,7 +325,7 @@ GET /api/bars?symbol=...&as_of_date=... - K线数据
 
 - Detail K-line view supports mouse wheel stock navigation. Wheel down moves to the next stock in the current left-side list/filter, wheel up moves to the previous stock.
 - Default chart layout is 3 indicator panels: MACD, DMI, Capital Game. The main chart enables both MA and BOLL by default.
-- Crosshair readout keeps the main price fields unchanged and appends active indicator panel values for the hovered K-line, no matter whether the pointer is over the main chart, volume chart, or any indicator panel.
+- Crosshair top readout keeps only the main price fields: date, open, high, low, close, percent change, and volume. Indicator values are drawn inside their own subchart areas instead of expanding the top readout block.
 
 # Market Index K-Line Support (2026-04-26)
 

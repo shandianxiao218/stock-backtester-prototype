@@ -1039,7 +1039,6 @@
 
   function renderReadout() {
     const bars = currentBars();
-    const indicators = chartState.latestIndicators || calculateIndicators(bars);
     const hoverIdx = state.hover ? state.hover.index : -1;
     const idx = hoverIdx >= 0 && hoverIdx < bars.length ? hoverIdx : bars.length - 1;
     const bar = bars[idx];
@@ -1052,19 +1051,7 @@
 
     const change = bar.close - prev.close;
     const pct = prev.close ? (change / prev.close) * 100 : 0;
-    const maFast = indicators.maFast[idx];
-    const maMid = indicators.maMid[idx];
-    const maSlow = indicators.maSlow[idx];
-    const rsiValue = indicators.rsiFastLine[idx];
     const changeCls = change > 0 ? "up" : change < 0 ? "down" : "flat";
-    const panelCells = state.indicatorPanels
-      .slice(0, state.indicatorPanelCount)
-      .flatMap((panel, index) => {
-        const type = panel.type || state.panel;
-        const panelIndicators = chartState.panelIndicators[index] || calculateIndicators(bars, indicatorSettingsForPanel(panel));
-        return indicatorHoverValues(panelIndicators, type, idx)
-          .map((item) => [`${panelTitle(type)} ${item.label}`, formatOptional(item.value), ""]);
-      });
 
     const cells = [
       ["日期", String(bar.date), ""],
@@ -1073,12 +1060,7 @@
       ["最低", formatPrice(bar.low), "down"],
       ["收盘", formatPrice(bar.close), changeCls],
       ["涨跌幅", `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`, changeCls],
-      ["成交量", formatCompact(bar.volume), ""],
-      [`MA${state.settings.indicators.maFast}`, formatOptional(maFast), ""],
-      [`MA${state.settings.indicators.maMid}`, formatOptional(maMid), ""],
-      [`MA${state.settings.indicators.maSlow}`, formatOptional(maSlow), ""],
-      [`RSI${state.settings.indicators.rsiFast}`, formatOptional(rsiValue), rsiValue > 70 ? "up" : rsiValue < 30 ? "down" : ""],
-      ...panelCells
+      ["成交量", formatCompact(bar.volume), ""]
     ];
 
     el.priceReadout.innerHTML = cells

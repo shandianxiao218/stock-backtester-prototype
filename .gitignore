@@ -1,5 +1,6 @@
 .chrome-profile/
 .chrome-headless-verify/
+.chrome-compact-verify/
 .chrome-profile-check*/
 .chrome-profile-local*/
 .chrome-profile-verify*/
