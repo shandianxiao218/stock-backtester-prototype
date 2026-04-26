@@ -98,6 +98,7 @@
     timer: null,
     search: "",
     listMode: "all",
+    marketFilters: loadMarketFilters(),
     watchlist: loadWatchlist(),
     loading: false,
     tool: "cursor",
@@ -152,6 +153,7 @@
     sortKey: "",
     sortDir: "",
     search: "",
+    marketFilters: "",
     rows: []
   };
 
@@ -164,6 +166,7 @@
     quoteList: document.getElementById("quoteList"),
     marketBoard: document.getElementById("marketBoard"),
     detailBoard: document.getElementById("detailBoard"),
+    marketFilterBar: document.getElementById("marketFilterBar"),
     marketTableWrap: document.querySelector(".market-table-wrap"),
     marketTableBody: document.getElementById("marketTableBody"),
     quoteCount: document.getElementById("quoteCount"),
@@ -246,6 +249,7 @@
     el.backtestDate.value = state.asOfDate;
 
     bindEvents();
+    syncMarketFilterControls();
     syncPanelButtons();
     syncToolButtons();
     hydrateSettingsFromInputs();
@@ -295,6 +299,19 @@
       renderQuotes();
       renderMarketTable();
     });
+
+    if (el.marketFilterBar) {
+      el.marketFilterBar.addEventListener("change", (event) => {
+        const input = event.target.closest("input[data-market-filter]");
+        if (!input) return;
+        state.marketFilters[input.dataset.marketFilter] = input.checked;
+        saveMarketFilters(state.marketFilters);
+        quoteViewCache.marketFilters = "";
+        if (el.marketTableWrap) el.marketTableWrap.scrollTop = 0;
+        renderQuotes();
+        renderMarketTable();
+      });
+    }
 
     document.querySelectorAll(".quote-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1800,7 +1817,7 @@
     let basePct = 10;
     if (/^(688|689)/.test(s)) { board = "star"; basePct = 20; }
     else if (/^(300|301)/.test(s)) { board = "chinext"; basePct = 20; }
-    else if (/^[48]/.test(s)) { board = "bse"; basePct = 30; }
+    else if (/^[489]/.test(s)) { board = "bse"; basePct = 30; }
     else { board = "main"; basePct = 10; }
     const limitPct = isST ? 5 : basePct;
     const label = isST ? "ST" : board === "star" ? "科创板" : board === "chinext" ? "创业板" : board === "bse" ? "北交所" : "主板";
@@ -2667,11 +2684,13 @@
 
   function filteredSortedQuotes() {
     const { key, dir } = state.quoteSort;
+    const marketFilterKey = marketFilterSignature();
     if (
       quoteViewCache.version === quoteVersion &&
       quoteViewCache.sortKey === key &&
       quoteViewCache.sortDir === dir &&
-      quoteViewCache.search === state.search
+      quoteViewCache.search === state.search &&
+      quoteViewCache.marketFilters === marketFilterKey
     ) {
       return quoteViewCache.rows;
     }
@@ -2679,7 +2698,7 @@
     const rows = quoteRows
       .filter((quote) => {
         const searchKey = `${quote.symbol} ${quote.name}`.toLowerCase();
-        return !state.search || searchKey.includes(state.search);
+        return marketFilterAllows(quote) && (!state.search || searchKey.includes(state.search));
       })
       .sort((a, b) => {
         if (key === "rank") return multiplier * ((a._rank || 0) - (b._rank || 0));
@@ -2696,8 +2715,31 @@
     quoteViewCache.sortKey = key;
     quoteViewCache.sortDir = dir;
     quoteViewCache.search = state.search;
+    quoteViewCache.marketFilters = marketFilterKey;
     quoteViewCache.rows = rows;
     return rows;
+  }
+
+  function marketFilterSignature() {
+    const filters = state.marketFilters || defaultMarketFilters();
+    return ["main", "chinext", "star", "st"].map((key) => (filters[key] ? "1" : "0")).join("");
+  }
+
+  function marketFilterAllows(quote) {
+    const filters = state.marketFilters || defaultMarketFilters();
+    const bucket = quoteMarketBucket(quote);
+    return Boolean(bucket && filters[bucket]);
+  }
+
+  function quoteMarketBucket(quote) {
+    if (!quote) return "";
+    const stock = getStock(quote.symbol);
+    const info = getBoardInfo(quote.symbol, stock ? stock.name : quote.name);
+    if (info.isST) return "st";
+    if (info.board === "chinext") return "chinext";
+    if (info.board === "star") return "star";
+    if (info.board === "main") return "main";
+    return "";
   }
 
   function compareLimitUpPriority(a, b, key, dir) {
@@ -2894,6 +2936,32 @@
       const data = localStorage.getItem("watchlist");
       return data ? JSON.parse(data) : [];
     } catch (_) { return []; }
+  }
+
+  function defaultMarketFilters() {
+    return { main: true, chinext: true, star: true, st: true };
+  }
+
+  function loadMarketFilters() {
+    const defaults = defaultMarketFilters();
+    try {
+      const data = localStorage.getItem("marketFilters");
+      const parsed = data ? JSON.parse(data) : {};
+      return { ...defaults, ...parsed };
+    } catch (_) {
+      return defaults;
+    }
+  }
+
+  function saveMarketFilters(filters) {
+    try { localStorage.setItem("marketFilters", JSON.stringify(filters)); } catch (_) {}
+  }
+
+  function syncMarketFilterControls() {
+    if (!el.marketFilterBar) return;
+    el.marketFilterBar.querySelectorAll("input[data-market-filter]").forEach((input) => {
+      input.checked = Boolean(state.marketFilters[input.dataset.marketFilter]);
+    });
   }
 
   function saveWatchlist(list) {

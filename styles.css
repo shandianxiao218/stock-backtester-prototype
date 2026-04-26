@@ -573,6 +573,33 @@ input[type="date"],
   font-size: 12px;
 }
 
+.market-filter-bar {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: #0d1116;
+}
+
+.market-filter-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.market-filter-bar input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
 .market-table-wrap {
   flex: 1;
   min-height: 0;
