@@ -273,8 +273,14 @@
       }
     });
 
-    el.prevDay.addEventListener("click", () => moveDay(-1));
-    el.nextDay.addEventListener("click", () => moveDay(1));
+    el.prevDay.addEventListener("click", (event) => {
+      event.preventDefault();
+      moveDay(-1);
+    }, true);
+    el.nextDay.addEventListener("click", (event) => {
+      event.preventDefault();
+      moveDay(1);
+    }, true);
     el.playToggle.addEventListener("click", togglePlayback);
     if (el.visibleDateTag) {
       el.visibleDateTag.addEventListener("click", () => {
@@ -1869,18 +1875,25 @@
   async function moveDay(step) {
     if (state.loading) return false;
     const direction = step < 0 ? "prev" : "next";
-    const baseDate = currentTradingDate() || state.asOfDate;
-    const payload = await fetchTradingDate(baseDate, direction);
-    const targetDate = payload.date;
-    if (!targetDate || (direction === "next" && targetDate > todayString())) {
-      flashStatus(direction === "prev" ? "已到最早交易日" : "已到最新交易日");
+    const baseDate = state.asOfDate || el.backtestDate.value || currentTradingDate();
+    try {
+      if (document.activeElement === el.backtestDate) el.backtestDate.blur();
+      const payload = await fetchTradingDate(baseDate, direction);
+      const targetDate = payload.date;
+      if (!targetDate || (direction === "next" && targetDate > todayString())) {
+        flashStatus(direction === "prev" ? "已到最早交易日" : "已到最新交易日");
+        return false;
+      }
+      state.asOfDate = targetDate;
+      await loadMarketData();
+      branchTimeline();
+      renderAll();
+      return true;
+    } catch (error) {
+      console.error(error);
+      flashStatus("交易日切换失败");
       return false;
     }
-    state.asOfDate = targetDate;
-    await loadMarketData();
-    branchTimeline();
-    renderAll();
-    return true;
   }
 
   function togglePlayback() {
