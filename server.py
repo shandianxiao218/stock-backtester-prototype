@@ -1319,6 +1319,60 @@ def fetch_quote_snapshot_payload(as_of_date: str) -> bytes | None:
     return (prefix + quotes_json + "}").encode("utf-8")
 
 
+def fetch_trading_date(base_date: str, direction: str) -> dict[str, Any]:
+    conn = get_db()
+    base_value = date_int(base_date)
+    if direction == "prev":
+        comparator = "<"
+        order = "DESC"
+    elif direction == "next":
+        comparator = ">"
+        order = "ASC"
+    else:
+        raise ValueError("direction must be prev or next")
+
+    for table in ("quote_snapshots", "daily_quotes"):
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        )
+        if not cursor.fetchone():
+            continue
+        if table == "quote_snapshots":
+            aggregate = "max" if direction == "prev" else "min"
+            cursor = conn.execute(
+                f"SELECT {aggregate}(date) FROM quote_snapshots WHERE date {comparator} ?",
+                (base_value,),
+            )
+        else:
+            cursor = conn.execute(
+                f"""
+                SELECT date
+                FROM daily_quotes
+                WHERE date {comparator} ?
+                GROUP BY date
+                ORDER BY date {order}
+                LIMIT 1
+                """,
+                (base_value,),
+            )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return {
+                "base_date": base_date,
+                "direction": direction,
+                "date": date_string(row[0]),
+                "source": table,
+            }
+
+    return {
+        "base_date": base_date,
+        "direction": direction,
+        "date": None,
+        "source": None,
+    }
+
+
 def fetch_bars(symbol: str, as_of_date: str, adjust: str, start_date: str) -> dict[str, Any]:
     """
     从数据库查询 K 线数据
@@ -1572,6 +1626,12 @@ class BacktesterHandler(SimpleHTTPRequestHandler):
                         "quotes": [public_quote(quote) for quote in quotes],
                     }
                 )
+                return
+
+            if path == "/api/trading-date":
+                base_date = parse_date(self.required_query(query, "date"), "date")
+                direction = query.get("direction", ["prev"])[0].lower()
+                self.send_json(fetch_trading_date(base_date, direction))
                 return
 
             if path == "/api/bars":

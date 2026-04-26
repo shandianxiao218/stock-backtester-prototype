@@ -71,11 +71,13 @@
   let quoteRows = [];
   let quoteVersion = 0;
   let quoteBySymbol = new Map();
+  let stockBySymbol = new Map();
   let loadSeq = 0;
 
   const marketData = new Map();
   const dataCache = new Map();
   const quoteCache = new Map();
+  const tradingDateCache = new Map();
 
   const state = {
     symbol: DEFAULT_SYMBOL,
@@ -250,9 +252,9 @@
     renderIndicatorPanelControls();
 
     try {
-      await loadStocks();
       await Promise.all([loadMarketData(), loadSessions()]);
       renderAll();
+      loadStocks({ background: true });
     } catch (error) {
       renderFatalError(error);
     }
@@ -422,15 +424,58 @@
     window.addEventListener("keydown", handleGlobalKeydown);
   }
 
-  async function loadStocks() {
-    const payload = await fetchJson("/api/stocks");
-    stocks = payload.stocks || [];
-    if (!stocks.length) throw new Error("股票列表为空");
-    if (!stocks.some((stock) => stock.symbol === state.symbol)) state.symbol = stocks[0].symbol;
+  async function loadStocks(options = {}) {
+    try {
+      const payload = await fetchJson("/api/stocks");
+      const loaded = payload.stocks || [];
+      if (!loaded.length) throw new Error("股票列表为空");
+      setStocks(loaded, { mergeQuotes: true });
+      if (!stockBySymbol.has(state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
+      if (options.background) renderAll();
+    } catch (error) {
+      if (!options.background) throw error;
+      console.warn(error);
+    }
+  }
+
+  function setStocks(nextStocks, options = {}) {
+    const previous = stockBySymbol;
+    stocks = nextStocks.map((stock) => {
+      const quote = quoteBySymbol.get(stock.symbol);
+      const old = previous.get(stock.symbol);
+      return {
+        symbol: stock.symbol,
+        name: stock.name || (quote && quote.name) || stock.symbol,
+        market: stock.market || (quote && quote.market) || "",
+        py: stock.py || (old && old.py) || ""
+      };
+    });
+    if (options.mergeQuotes) {
+      const seen = new Set(stocks.map((stock) => stock.symbol));
+      quoteRows.forEach((quote) => {
+        if (!seen.has(quote.symbol)) {
+          stocks.push({ symbol: quote.symbol, name: quote.name, market: quote.market, py: "" });
+          seen.add(quote.symbol);
+        }
+      });
+    }
+    stockBySymbol = new Map(stocks.map((stock) => [stock.symbol, stock]));
+  }
+
+  function setStocksFromQuotes() {
+    const next = quoteRows.map((quote) => {
+      const existing = stockBySymbol.get(quote.symbol);
+      return {
+        symbol: quote.symbol,
+        name: quote.name,
+        market: quote.market,
+        py: existing ? existing.py : ""
+      };
+    });
+    setStocks(next);
   }
 
   async function loadMarketData() {
-    if (!stocks.length) return;
     const t = perfStart(`loadMarketData(asOf=${state.asOfDate})`);
     const sequence = ++loadSeq;
     state.loading = true;
@@ -444,13 +489,8 @@
       quoteVersion += 1;
       quoteBySymbol = new Map();
       quoteRows.forEach((quote) => quoteBySymbol.set(quote.symbol, quote));
-      if (quoteRows.length && stocks.length !== quoteRows.length) {
-        stocks = quoteRows.map((quote) => {
-          const existing = stocks.find((s) => s.symbol === quote.symbol);
-          return { symbol: quote.symbol, name: quote.name, market: quote.market, py: existing ? existing.py : "" };
-        });
-      }
-      if (!stocks.some((stock) => stock.symbol === state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
+      if (quoteRows.length) setStocksFromQuotes();
+      if (!stockBySymbol.has(state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
       if (state.view === "detail") await ensureSymbolBars(state.symbol);
       state.hover = null;
       state.drag = null;
@@ -481,6 +521,15 @@
     payload.quotes = normalizeQuoteRows(payload);
     quoteCache.set(key, payload);
     perfEnd(t);
+    return payload;
+  }
+
+  async function fetchTradingDate(baseDate, direction) {
+    const key = `trading-date|${baseDate}|${direction}`;
+    if (tradingDateCache.has(key)) return tradingDateCache.get(key);
+    const params = new URLSearchParams({ date: baseDate, direction });
+    const payload = await fetchJson(`/api/trading-date?${params.toString()}`);
+    tradingDateCache.set(key, payload);
     return payload;
   }
 
@@ -613,8 +662,8 @@
     el.marketStatus.textContent = `东方财富本地行情 · 服务端截断至 ${state.asOfDate}`;
     renderView();
     renderMarketStrip();
-    renderQuotes();
     if (state.view === "market") renderMarketTable();
+    renderQuotes();
     renderHeader();
     renderBoardRule();
     renderReadout();
@@ -1790,51 +1839,19 @@
 
   async function moveDay(step) {
     if (state.loading) return false;
-    const bars = currentBars();
-    const originalAsOf = state.asOfDate;
-    const originalTradingDate = currentTradingDate();
-
-    if (step < 0) {
-      if (!bars.length) {
-        state.asOfDate = shiftCalendarDays(originalAsOf, -1);
-        await loadMarketData();
-        renderAll();
-        return true;
-      }
-      if (bars.length < 2) return false;
-      state.asOfDate = bars[bars.length - 2].date;
-      branchTimeline();
-      await loadMarketData();
-      renderAll();
-      return true;
+    const direction = step < 0 ? "prev" : "next";
+    const baseDate = currentTradingDate() || state.asOfDate;
+    const payload = await fetchTradingDate(baseDate, direction);
+    const targetDate = payload.date;
+    if (!targetDate || (direction === "next" && targetDate > todayString())) {
+      flashStatus(direction === "prev" ? "已到最早交易日" : "已到最新交易日");
+      return false;
     }
-
-    if (!bars.length) {
-      const nextDate = shiftCalendarDays(originalAsOf, 1);
-      if (nextDate > todayString()) return false;
-      state.asOfDate = nextDate;
-      await loadMarketData();
-      renderAll();
-      return true;
-    }
-
-    for (let offset = 1; offset <= 10; offset += 1) {
-      const nextDate = shiftCalendarDays(originalAsOf, offset);
-      if (nextDate > todayString()) break;
-      state.asOfDate = nextDate;
-      await loadMarketData();
-      const nextTradingDate = currentTradingDate();
-      if (nextTradingDate && nextTradingDate !== originalTradingDate && nextTradingDate > originalTradingDate) {
-        branchTimeline();
-        renderAll();
-        return true;
-      }
-    }
-
-    state.asOfDate = originalAsOf;
+    state.asOfDate = targetDate;
     await loadMarketData();
+    branchTimeline();
     renderAll();
-    return false;
+    return true;
   }
 
   function togglePlayback() {
@@ -2572,7 +2589,7 @@
   }
 
   function getStock(symbol) {
-    return stocks.find((stock) => stock.symbol === symbol);
+    return stockBySymbol.get(symbol);
   }
 
   function getQuote(symbol) {
