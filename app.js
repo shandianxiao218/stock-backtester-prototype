@@ -264,6 +264,8 @@
     const handleDateSelect = async () => {
       await setAsOfDate(el.backtestDate.value, { branch: true, fromPicker: true });
     };
+    el.backtestDate.addEventListener("click", () => openDatePicker());
+    el.backtestDate.addEventListener("focus", () => openDatePicker());
     el.backtestDate.addEventListener("change", handleDateSelect);
     el.backtestDate.addEventListener("input", () => {
       if (el.backtestDate.value && el.backtestDate.value !== state.asOfDate) {
@@ -274,6 +276,12 @@
     el.prevDay.addEventListener("click", () => moveDay(-1));
     el.nextDay.addEventListener("click", () => moveDay(1));
     el.playToggle.addEventListener("click", togglePlayback);
+    if (el.visibleDateTag) {
+      el.visibleDateTag.addEventListener("click", () => {
+        el.backtestDate.focus();
+        openDatePicker();
+      });
+    }
 
     el.stockSearch.addEventListener("input", (event) => {
       state.search = event.target.value.trim().toLowerCase();
@@ -491,6 +499,8 @@
     try {
       const payload = await fetchQuotes();
       if (sequence !== loadSeq) return;
+      const tradingDate = payload.trade_date || (payload.quotes && payload.quotes[0] && payload.quotes[0].date);
+      if (tradingDate && tradingDate !== state.asOfDate) state.asOfDate = tradingDate;
       quoteRows = payload.quotes || [];
       quoteVersion += 1;
       quoteBySymbol = new Map();
@@ -513,19 +523,23 @@
   }
 
   async function fetchQuotes() {
-    const t = perfStart(`fetchQuotes(${state.asOfDate})`);
-    const key = `quotes|${state.asOfDate}`;
+    const requestedDate = state.asOfDate;
+    const t = perfStart(`fetchQuotes(${requestedDate})`);
+    const key = `quotes|${requestedDate}`;
     if (quoteCache.has(key)) {
       perfEnd(t);
       return quoteCache.get(key);
     }
     const params = new URLSearchParams({
-      as_of_date: state.asOfDate,
+      as_of_date: requestedDate,
       market: "all"
     });
     const payload = await fetchJson(`/api/quotes?${params.toString()}`);
     payload.quotes = normalizeQuoteRows(payload);
     quoteCache.set(key, payload);
+    if (payload.trade_date && payload.trade_date !== requestedDate) {
+      quoteCache.set(`quotes|${payload.trade_date}`, payload);
+    }
     perfEnd(t);
     return payload;
   }
@@ -537,6 +551,15 @@
     const payload = await fetchJson(`/api/trading-date?${params.toString()}`);
     tradingDateCache.set(key, payload);
     return payload;
+  }
+
+  function openDatePicker() {
+    if (!el.backtestDate || typeof el.backtestDate.showPicker !== "function") return;
+    try {
+      el.backtestDate.showPicker();
+    } catch (error) {
+      // Some browsers only allow showPicker during the original user gesture.
+    }
   }
 
   function normalizeQuoteRows(payload) {

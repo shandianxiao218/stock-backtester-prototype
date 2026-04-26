@@ -232,6 +232,15 @@ select:focus {
   border-color: var(--accent);
 }
 
+input[type="date"],
+#visibleDateTag {
+  cursor: pointer;
+}
+
+#visibleDateTag:hover {
+  color: var(--accent);
+}
+
 .icon-button,
 .text-button,
 .segment,
