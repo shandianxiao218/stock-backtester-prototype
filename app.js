@@ -2624,7 +2624,7 @@
       })
       .sort((a, b) => {
         if (key === "rank") return multiplier * ((a._rank || 0) - (b._rank || 0));
-        const limitCompare = compareLimitUpPriority(a, b, key);
+        const limitCompare = compareLimitUpPriority(a, b, key, dir);
         if (limitCompare) return limitCompare;
         const av = a[key];
         const bv = b[key];
@@ -2641,8 +2641,8 @@
     return rows;
   }
 
-  function compareLimitUpPriority(a, b, key) {
-    if (!["pct", "change", "close", "volumeRatio", "volume", "amount"].includes(key)) return 0;
+  function compareLimitUpPriority(a, b, key, dir) {
+    if (key !== "pct" || dir !== "desc") return 0;
     const aLimit = isQuoteLimitUp(a);
     const bLimit = isQuoteLimitUp(b);
     if (aLimit === bLimit) return 0;
