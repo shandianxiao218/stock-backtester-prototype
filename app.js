@@ -203,6 +203,10 @@
     positionList: document.getElementById("positionList"),
     tradeLog: document.getElementById("tradeLog"),
     clearDrawings: document.getElementById("clearDrawings"),
+    rebuildDb: document.getElementById("rebuildDb"),
+    dbProgressWrap: document.getElementById("dbProgressWrap"),
+    dbProgressBar: document.getElementById("dbProgressBar"),
+    dbProgressText: document.getElementById("dbProgressText"),
     maFast: document.getElementById("maFast"),
     maMid: document.getElementById("maMid"),
     maSlow: document.getElementById("maSlow"),
@@ -338,6 +342,10 @@
       state.draftDrawing = null;
       renderCharts();
     });
+
+    if (el.rebuildDb) {
+      el.rebuildDb.addEventListener("click", triggerRebuildDb);
+    }
 
     document.querySelectorAll(".period-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2624,6 +2632,65 @@
     state.displayBars = clamp(state.displayBars + delta, MIN_DISPLAY_BARS, MAX_DISPLAY_BARS);
     if (el.barCountLabel) el.barCountLabel.textContent = `${state.displayBars} 根`;
     renderCharts();
+  }
+
+  let dbPollTimer = null;
+
+  async function triggerRebuildDb() {
+    if (!el.rebuildDb) return;
+    el.rebuildDb.disabled = true;
+    el.rebuildDb.textContent = "导入中...";
+    el.dbProgressWrap.hidden = false;
+    el.dbProgressBar.style.setProperty("--progress", "0%");
+    el.dbProgressText.textContent = "触发导入...";
+
+    try {
+      await fetchJson("/api/rebuild-db", { method: "POST" });
+    } catch (e) {
+      el.dbProgressText.textContent = "启动失败: " + (e.message || e);
+      el.rebuildDb.disabled = false;
+      el.rebuildDb.textContent = "更新数据";
+      return;
+    }
+
+    dbPollTimer = setInterval(pollDbProgress, 1000);
+  }
+
+  async function pollDbProgress() {
+    try {
+      const data = await fetchJson("/api/db-progress");
+      const msg = data.message || "";
+      el.dbProgressText.textContent = msg;
+
+      if (data.progress && data.progress.total > 0) {
+        const pct = Math.round((data.progress.current / data.progress.total) * 100);
+        el.dbProgressBar.style.setProperty("--progress", pct + "%");
+      }
+
+      if (!data.in_progress) {
+        clearInterval(dbPollTimer);
+        dbPollTimer = null;
+        el.rebuildDb.disabled = false;
+        el.rebuildDb.textContent = "更新数据";
+        if (msg.includes("complete") || msg.includes("完成")) {
+          el.dbProgressText.textContent = msg;
+          setTimeout(() => { el.dbProgressWrap.hidden = true; }, 3000);
+          // Clear caches and reload
+          dataCache.clear();
+          quoteCache.clear();
+          marketData.clear();
+          await loadStocks();
+          await loadMarketData();
+          renderAll();
+        }
+      }
+    } catch (e) {
+      clearInterval(dbPollTimer);
+      dbPollTimer = null;
+      el.dbProgressText.textContent = "查询进度失败";
+      el.rebuildDb.disabled = false;
+      el.rebuildDb.textContent = "更新数据";
+    }
   }
 
   function flashStatus(message) {

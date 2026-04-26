@@ -307,7 +307,7 @@ def trigger_db_import() -> dict[str, Any]:
     try:
         import subprocess
         process = subprocess.Popen(
-            [str(DATA_IMPORT_EXE), str(DB_FILE), str(EASTMONEY_ROOT)],
+            [str(DATA_IMPORT_EXE), str(DB_FILE), str(EASTMONEY_ROOT), "20200101"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP

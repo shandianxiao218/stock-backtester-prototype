@@ -128,6 +128,43 @@ h1 {
   min-width: 0;
 }
 
+.db-update-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.db-progress-bar {
+  width: 80px;
+  height: 6px;
+  background: #1b222b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.db-progress-bar::after {
+  content: '';
+  display: block;
+  height: 100%;
+  width: var(--progress, 0%);
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.db-progress-text {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .index-tile {
   min-width: 0;
   padding: 7px 10px;
@@ -759,6 +796,12 @@ canvas {
 
 .text-button:hover {
   color: var(--text);
+}
+
+.text-button.small {
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
 }
 
 .session-bar {

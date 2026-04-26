@@ -498,12 +498,13 @@ static int import_market_data(const char *day_file, const char *market, StockInf
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <db_path> <eastmoney_root>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <db_path> <eastmoney_root> [snapshot_start_date]\n", argv[0]);
         return 1;
     }
 
     char *db_path = argv[1];
     char *eastmoney_root = argv[2];
+    uint32_t snapshot_start = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 20200101;
 
     sprintf(g_progress_path, "%s.progress", db_path);
 
@@ -595,7 +596,8 @@ int main(int argc, char *argv[]) {
 
     strcpy(g_message, "Precomputing recent quote snapshots...");
     write_progress();
-    sqlite3_exec(g_db,
+    char snapshot_sql[2048];
+    snprintf(snapshot_sql, sizeof(snapshot_sql),
         "INSERT INTO quote_snapshots(date, count, quotes_json) "
         "SELECT date, count(*), '[' || group_concat(json, ',') || ']' "
         "FROM ("
@@ -614,10 +616,11 @@ int main(int argc, char *argv[]) {
         "    round(q.amount, 2)"
         "  ) AS json "
         "  FROM daily_quotes q JOIN stocks s ON s.symbol = q.symbol "
-        "  WHERE q.date >= 20250101 "
+        "  WHERE q.date >= %u "
         "  ORDER BY q.date, s.market, q.symbol"
         ") GROUP BY date",
-        NULL, NULL, NULL);
+        snapshot_start);
+    sqlite3_exec(g_db, snapshot_sql, NULL, NULL, NULL);
     create_indexes();
 
     // Update source signature
