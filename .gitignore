@@ -25,3 +25,10 @@ server-*.log
 chrome-check.err.log
 edge-check.err.log
 data_import.exe
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
