@@ -21,7 +21,7 @@
 
 body {
   margin: 0;
-  min-width: 1240px;
+  min-width: 1024px;
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
@@ -73,7 +73,7 @@ button:disabled {
 .topbar {
   height: 68px;
   display: grid;
-  grid-template-columns: 310px 1fr 430px;
+  grid-template-columns: minmax(220px, 310px) minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 14px;
   padding: 10px 14px;
@@ -123,15 +123,18 @@ h1 {
 
 .market-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
   gap: 10px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .db-update-area {
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: max-content;
 }
 
 .db-progress-wrap {
@@ -190,6 +193,9 @@ h1 {
   display: flex;
   align-items: end;
   gap: 8px;
+  min-width: max-content;
+  position: relative;
+  z-index: 4;
 }
 
 .field {
@@ -997,7 +1003,7 @@ canvas {
   }
 
   .topbar {
-    grid-template-columns: 270px 1fr 408px;
+    grid-template-columns: 270px minmax(0, 1fr) max-content max-content;
   }
 
   .workspace {

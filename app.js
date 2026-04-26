@@ -261,8 +261,14 @@
   }
 
   function bindEvents() {
-    el.backtestDate.addEventListener("change", async () => {
-      await setAsOfDate(el.backtestDate.value, { branch: true });
+    const handleDateSelect = async () => {
+      await setAsOfDate(el.backtestDate.value, { branch: true, fromPicker: true });
+    };
+    el.backtestDate.addEventListener("change", handleDateSelect);
+    el.backtestDate.addEventListener("input", () => {
+      if (el.backtestDate.value && el.backtestDate.value !== state.asOfDate) {
+        handleDateSelect();
+      }
     });
 
     el.prevDay.addEventListener("click", () => moveDay(-1));
