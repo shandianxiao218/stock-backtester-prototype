@@ -321,3 +321,8 @@ GET /api/bars?symbol=...&as_of_date=... - K线数据
 
 - K线主图使用红色空心上涨、青色实体下跌；涨停日使用橘色实体。上下影线只绘制到实体边界，避免实体中间出现贯穿线。
 - 副图数量可在图表工具区设置，范围 1-5。隐藏副图不参与绘制，网格高度随副图数量自动调整。
+# Chart Interaction Defaults (2026-04-26)
+
+- Detail K-line view supports mouse wheel stock navigation. Wheel down moves to the next stock in the current left-side list/filter, wheel up moves to the previous stock.
+- Default chart layout is 3 indicator panels: MACD, DMI, Capital Game. The main chart enables both MA and BOLL by default.
+- Crosshair readout keeps the main price fields unchanged and appends active indicator panel values for the hovered K-line, no matter whether the pointer is over the main chart, volume chart, or any indicator panel.

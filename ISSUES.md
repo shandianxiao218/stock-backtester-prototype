@@ -188,3 +188,15 @@ Exit code: 139
 - 副图数设回 5：五个副图全部恢复，控制项数量为 5。
 - 主图像素检查存在空心实体背景区域。
 - 主图像素检查存在橘色、青色、红色像素，确认涨停实体、下跌实体、上涨描边都已渲染。
+# 2026-04-26 Chart Interaction Follow-up
+
+Status: done
+
+## TODO
+- [x] Use mouse wheel on the detail K-line chart to switch stocks by the active left-side list order.
+- [x] Set default indicator panel count to 3.
+- [x] Set default panels to MACD, DMI, Capital Game.
+- [x] Enable MA and BOLL on the main chart by default.
+- [x] Keep the main price readout unchanged while appending active panel indicator values.
+- [x] Show indicator values when the crosshair is over any chart area, not only the matching subchart.
+- [x] Verify in browser and commit.

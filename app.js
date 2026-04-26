@@ -55,8 +55,9 @@
   const DEFAULT_DISPLAY_BARS = 90;
   const MIN_DISPLAY_BARS = 30;
   const MAX_DISPLAY_BARS = 260;
-  const DEFAULT_INDICATOR_PANEL_COUNT = 5;
+  const DEFAULT_INDICATOR_PANEL_COUNT = 3;
   const INDICATOR_TYPES = ["macd", "rsi", "kdj", "dmi", "capital"];
+  const DEFAULT_INDICATOR_PANEL_TYPES = ["macd", "dmi", "capital", "rsi", "kdj"];
   const API_START_DATE = "2020-01-01";
   const DEFAULT_SYMBOL = "000001";
   const EMPTY_ACCOUNT = {
@@ -91,7 +92,7 @@
     indicatorPanels: defaultIndicatorPanels(),
     panel: initialPanel(),
     showMA: true,
-    showBOLL: false,
+    showBOLL: true,
     trades: [],
     drawings: [],
     sessions: [],
@@ -138,7 +139,8 @@
   const chartState = {
     range: null,
     priceScale: null,
-    latestIndicators: null
+    latestIndicators: null,
+    panelIndicators: []
   };
 
   const marketTableState = {
@@ -429,7 +431,6 @@
     ].forEach((input) => {
       input.addEventListener("change", () => {
         hydrateIndicatorSettings();
-        renderReadout();
         renderCharts();
       });
     });
@@ -461,6 +462,9 @@
       canvas.addEventListener("pointerup", handlePointerUp);
       canvas.addEventListener("pointerleave", handlePointerLeave);
     });
+    if (el.canvasStack) {
+      el.canvasStack.addEventListener("wheel", handleChartWheel, { passive: false });
+    }
 
     el.indicatorCanvases.forEach((canvas, index) => {
       canvas.addEventListener("dblclick", (event) => showIndicatorParamModal(index, event));
@@ -693,6 +697,8 @@
     state.rangeSelection = null;
     state.drag = null;
     state.draftDrawing = null;
+    chartState.latestIndicators = null;
+    chartState.panelIndicators = [];
     setBusy(true);
     try {
       await ensureSymbolBars(symbol);
@@ -850,18 +856,24 @@
         const stock = getStock(symbol);
         const quote = getQuote(symbol);
         if (!stock || !quote) {
-          return makeIndexTile(stock ? stock.name : symbol, NaN, NaN);
+          return makeIndexTile(stock ? stock.name : symbol, NaN, NaN, symbol);
         }
-        return makeIndexTile(stock.name, quote.close, quote.pct);
+        return makeIndexTile(stock.name, quote.close, quote.pct, symbol);
       })
       .join("");
     el.marketStrip.innerHTML = tiles || `<div class="empty-state">暂无行情</div>`;
+    el.marketStrip.querySelectorAll(".index-tile").forEach((tile) => {
+      tile.addEventListener("dblclick", () => {
+        const sym = tile.dataset.symbol;
+        if (sym) openSymbol(sym);
+      });
+    });
   }
 
-  function makeIndexTile(name, value, pct) {
+  function makeIndexTile(name, value, pct, symbol) {
     const cls = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
     return `
-      <div class="index-tile">
+      <div class="index-tile" data-symbol="${escapeHtml(symbol || "")}">
         <b>${escapeHtml(name)}</b>
         <span class="${cls}">${formatOptional(value)} ${Number.isFinite(pct) && pct > 0 ? "+" : ""}${Number.isFinite(pct) ? pct.toFixed(2) : "--"}%</span>
       </div>
@@ -958,7 +970,7 @@
 
   function renderReadout() {
     const bars = currentBars();
-    const indicators = calculateIndicators(bars);
+    const indicators = chartState.latestIndicators || calculateIndicators(bars);
     const hoverIdx = state.hover ? state.hover.index : -1;
     const idx = hoverIdx >= 0 && hoverIdx < bars.length ? hoverIdx : bars.length - 1;
     const bar = bars[idx];
@@ -976,6 +988,14 @@
     const maSlow = indicators.maSlow[idx];
     const rsiValue = indicators.rsiFastLine[idx];
     const changeCls = change > 0 ? "up" : change < 0 ? "down" : "flat";
+    const panelCells = state.indicatorPanels
+      .slice(0, state.indicatorPanelCount)
+      .flatMap((panel, index) => {
+        const type = panel.type || state.panel;
+        const panelIndicators = chartState.panelIndicators[index] || calculateIndicators(bars, indicatorSettingsForPanel(panel));
+        return indicatorHoverValues(panelIndicators, type, idx)
+          .map((item) => [`${panelTitle(type)} ${item.label}`, formatOptional(item.value), ""]);
+      });
 
     const cells = [
       ["日期", String(bar.date), ""],
@@ -988,7 +1008,8 @@
       [`MA${state.settings.indicators.maFast}`, formatOptional(maFast), ""],
       [`MA${state.settings.indicators.maMid}`, formatOptional(maMid), ""],
       [`MA${state.settings.indicators.maSlow}`, formatOptional(maSlow), ""],
-      [`RSI${state.settings.indicators.rsiFast}`, formatOptional(rsiValue), rsiValue > 70 ? "up" : rsiValue < 30 ? "down" : ""]
+      [`RSI${state.settings.indicators.rsiFast}`, formatOptional(rsiValue), rsiValue > 70 ? "up" : rsiValue < 30 ? "down" : ""],
+      ...panelCells
     ];
 
     el.priceReadout.innerHTML = cells
@@ -1112,6 +1133,8 @@
       });
       chartState.range = null;
       chartState.priceScale = null;
+      chartState.latestIndicators = null;
+      chartState.panelIndicators = [];
       perfEnd(t);
       return;
     }
@@ -1125,6 +1148,7 @@
 
     drawPriceChart(el.priceCanvas, bars, indicators, range);
     drawVolumeChart(el.volumeCanvas, bars, range);
+    chartState.panelIndicators = [];
     el.indicatorCanvases.forEach((canvas, index) => {
       if (index >= state.indicatorPanelCount) {
         canvas.hidden = true;
@@ -1133,6 +1157,7 @@
       canvas.hidden = false;
       const panel = state.indicatorPanels[index] || state.indicatorPanels[0];
       const panelIndicators = calculateIndicators(bars, indicatorSettingsForPanel(panel));
+      chartState.panelIndicators[index] = panelIndicators;
       drawIndicatorChart(canvas, bars, panelIndicators, range, panel);
     });
     renderReadout();
@@ -1383,10 +1408,9 @@
     drawAxisText(ctx, panelTitle(panel), width - pad.right - 6, 13, "#d7dde5", "right");
     drawCrosshair(ctx, "indicator", pad, width, height, xForIndex);
 
-    if (state.hover && state.hover.source === "indicator") {
+    if (state.hover) {
       const idx = clamp(state.hover.index, range.start, range.end);
-      const rIdx = idx - range.start;
-      const values = indicatorHoverValues(indicators, panel, rIdx);
+      const values = indicatorHoverValues(indicators, panel, idx);
       if (values.length) {
         let cy = pad.top + 14;
         ctx.save();
@@ -1402,8 +1426,7 @@
     }
   }
 
-  function indicatorHoverValues(indicators, panel, rIdx) {
-    const idx = rIdx + (chartState.range ? chartState.range.start : 0);
+  function indicatorHoverValues(indicators, panel, idx) {
     const get = (arr) => (idx >= 0 && idx < arr.length ? arr[idx] : NaN);
     if (panel === "macd") return [
       { label: "DIF", value: get(indicators.macd), color: "#e2b34b" },
@@ -1615,6 +1638,19 @@
     }
   }
 
+  let lastWheelNavAt = 0;
+
+  function handleChartWheel(event) {
+    if (state.view !== "detail" || state.loading || event.ctrlKey) return;
+    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (!delta) return;
+    event.preventDefault();
+    const now = performance.now();
+    if (now - lastWheelNavAt < 180) return;
+    lastWheelNavAt = now;
+    navigateList(delta > 0 ? 1 : -1);
+  }
+
   let keyBuffer = "";
   let keySelectedIdx = 0;
   let keyMatches = [];
@@ -1749,10 +1785,11 @@
   }
 
   function navigateList(step) {
+    if (state.loading) return;
     const list = currentQuoteList();
     if (list.length < 2) return;
     const idx = list.findIndex((q) => q.symbol === state.symbol);
-    const next = clamp(idx + step, 0, list.length - 1);
+    const next = clamp((idx < 0 ? 0 : idx) + step, 0, list.length - 1);
     if (next === idx) return;
     state.symbol = list[next].symbol;
     if (state.view === "detail") openSymbol(state.symbol);
@@ -2477,12 +2514,12 @@
   }
 
   function defaultIndicatorPanels() {
-    return INDICATOR_TYPES.map((type, index) => ({
+    return DEFAULT_INDICATOR_PANEL_TYPES.map((type, index) => ({
       type,
       period: type === "dmi" ? 14 : type === "capital" ? 13 : type === "rsi" ? 6 : type === "kdj" ? 9 : 12,
       second: type === "macd" ? 26 : type === "rsi" ? 12 : 0,
       signal: type === "macd" ? 9 : 0,
-      enabled: index < 5
+      enabled: index < DEFAULT_INDICATOR_PANEL_COUNT
     }));
   }
 
