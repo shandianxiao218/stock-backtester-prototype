@@ -531,9 +531,14 @@
   async function fetchQuotes() {
     const requestedDate = state.asOfDate;
     const t = perfStart(`fetchQuotes(${requestedDate})`);
+    const payload = await fetchQuoteSnapshotForDate(requestedDate);
+    perfEnd(t);
+    return payload;
+  }
+
+  async function fetchQuoteSnapshotForDate(requestedDate) {
     const key = `quotes|${requestedDate}`;
     if (quoteCache.has(key)) {
-      perfEnd(t);
       return quoteCache.get(key);
     }
     const params = new URLSearchParams({
@@ -546,17 +551,35 @@
     if (payload.trade_date && payload.trade_date !== requestedDate) {
       quoteCache.set(`quotes|${payload.trade_date}`, payload);
     }
-    perfEnd(t);
     return payload;
   }
 
   async function fetchTradingDate(baseDate, direction) {
     const key = `trading-date|${baseDate}|${direction}`;
     if (tradingDateCache.has(key)) return tradingDateCache.get(key);
-    const params = new URLSearchParams({ date: baseDate, direction });
-    const payload = await fetchJson(`/api/trading-date?${params.toString()}`);
+    const payload = await fetchTradingDateFromQuotes(baseDate, direction);
     tradingDateCache.set(key, payload);
     return payload;
+  }
+
+  async function fetchTradingDateFromQuotes(baseDate, direction) {
+    const step = direction === "prev" ? -1 : 1;
+    let cursor = baseDate;
+    for (let i = 0; i < 370; i += 1) {
+      cursor = shiftCalendarDays(cursor, step);
+      if (direction === "prev" && cursor < API_START_DATE) break;
+      if (direction === "next" && cursor > todayString()) break;
+      const payload = await fetchQuoteSnapshotForDate(cursor);
+      const tradeDate = payload.trade_date || (payload.quotes && payload.quotes[0] && payload.quotes[0].date);
+      if (!tradeDate) continue;
+      if (direction === "prev" && tradeDate < baseDate) {
+        return { base_date: baseDate, direction, date: tradeDate, source: "quotes_fallback" };
+      }
+      if (direction === "next" && tradeDate > baseDate) {
+        return { base_date: baseDate, direction, date: tradeDate, source: "quotes_fallback" };
+      }
+    }
+    return { base_date: baseDate, direction, date: null, source: "quotes_fallback" };
   }
 
   function openDatePicker() {
