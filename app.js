@@ -2624,6 +2624,8 @@
       })
       .sort((a, b) => {
         if (key === "rank") return multiplier * ((a._rank || 0) - (b._rank || 0));
+        const limitCompare = compareLimitUpPriority(a, b, key);
+        if (limitCompare) return limitCompare;
         const av = a[key];
         const bv = b[key];
         if (typeof av === "number" || typeof bv === "number") {
@@ -2637,6 +2639,26 @@
     quoteViewCache.search = state.search;
     quoteViewCache.rows = rows;
     return rows;
+  }
+
+  function compareLimitUpPriority(a, b, key) {
+    if (!["pct", "change", "close", "volumeRatio", "volume", "amount"].includes(key)) return 0;
+    const aLimit = isQuoteLimitUp(a);
+    const bLimit = isQuoteLimitUp(b);
+    if (aLimit === bLimit) return 0;
+    return aLimit ? -1 : 1;
+  }
+
+  function isQuoteLimitUp(quote) {
+    if (!quote || !Number.isFinite(quote.close)) return false;
+    const stock = getStock(quote.symbol);
+    const boardInfo = getBoardInfo(quote.symbol, stock ? stock.name : quote.name);
+    const limitPct = boardInfo.limitPct;
+    if (Number.isFinite(quote.prevClose) && quote.prevClose > 0) {
+      const target = quote.prevClose * (1 + limitPct / 100);
+      return quote.close >= target - quote.prevClose * 0.0015;
+    }
+    return Number.isFinite(quote.pct) && quote.pct >= limitPct - 0.15;
   }
 
   function setQuoteSort(key) {
