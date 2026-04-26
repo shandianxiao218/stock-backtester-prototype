@@ -1203,12 +1203,16 @@
         isLimitDown = bar.close <= prev.close * (1 - pct) + tol;
       }
       let strokeColor;
+      let fillColor = null;
       if (isLimitUp) {
-        strokeColor = "#f5a623";
+        strokeColor = "#ff9f1a";
+        fillColor = "#ff9f1a";
       } else if (isLimitDown) {
-        strokeColor = "#20b26b";
+        strokeColor = "#00d7df";
+        fillColor = "#00d7df";
       } else {
-        strokeColor = rising ? "#e05252" : "#20b26b";
+        strokeColor = rising ? "#ff3b30" : "#00d7df";
+        fillColor = rising ? null : "#00d7df";
       }
       const openY = y(bar.open);
       const closeY = y(bar.close);
@@ -1221,6 +1225,10 @@
       ctx.lineWidth = 1;
       if (highY < bodyY) line(ctx, x, highY, x, bodyY);
       if (lowY > bodyBottom) line(ctx, x, bodyBottom, x, lowY);
+      if (fillColor) {
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(x - candleW / 2, bodyY, candleW, bodyH);
+      }
       ctx.strokeStyle = strokeColor;
       ctx.strokeRect(x - candleW / 2, bodyY, candleW, bodyH);
     });
