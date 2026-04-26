@@ -200,3 +200,16 @@ Status: done
 - [x] Keep the main price readout unchanged while appending active panel indicator values.
 - [x] Show indicator values when the crosshair is over any chart area, not only the matching subchart.
 - [x] Verify in browser and commit.
+
+# 2026-04-26 Market Index Board And Index K-Line
+
+Status: done
+
+## TODO
+- [x] Add top market index information to the all-market page.
+- [x] Use local Eastmoney index K-line data for 上证指数, 深证成指, 创业板指.
+- [x] Double-click a market index card to open the matching index K-line.
+- [x] Preserve stock `000001` as 平安银行 by using `SH000001` as the Shanghai index alias.
+- [x] Prevent background `/api/stocks` refresh from resetting the currently opened index symbol.
+- [x] Add static asset version query strings to avoid stale cached `app.js` / `styles.css`.
+- [x] Browser-verify index cards, index K-line jump, default indicators, crosshair readout, and wheel stock navigation.

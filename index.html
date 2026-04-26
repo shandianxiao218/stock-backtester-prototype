@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>股票回测终端原型</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260426-market-index" />
   </head>
   <body>
     <div class="terminal-shell">
@@ -98,6 +98,7 @@
               <strong>全市场行情</strong>
               <span id="quoteCount">--</span>
             </div>
+            <div id="marketIndexBoard" class="market-index-board" aria-label="大盘指数"></div>
             <div id="marketFilterBar" class="market-filter-bar" aria-label="市场筛选">
               <label><input type="checkbox" data-market-filter="main" checked /> 沪深主板</label>
               <label><input type="checkbox" data-market-filter="chinext" checked /> 创业板</label>
@@ -238,6 +239,6 @@
       </main>
     </div>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260426-market-index"></script>
   </body>
 </html>

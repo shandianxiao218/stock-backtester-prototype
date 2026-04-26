@@ -48,6 +48,12 @@ STOCKS: list[dict[str, Any]] = [
 ]
 FALLBACK_NAMES = {stock["symbol"]: stock["name"] for stock in STOCKS}
 
+MARKET_INDEXES: dict[str, dict[str, str]] = {
+    "SH000001": {"symbol": "SH000001", "source_symbol": "000001", "name": "上证指数", "market": "SH"},
+    "SZ399001": {"symbol": "SZ399001", "source_symbol": "399001", "name": "深证成指", "market": "SZ"},
+    "SZ399006": {"symbol": "SZ399006", "source_symbol": "399006", "name": "创业板指", "market": "SZ"},
+}
+
 ADJUST_FLAGS = {
     "none": "0",
     "qfq": "1",
@@ -431,6 +437,19 @@ def get_mmap_context(day_file: Path) -> tuple[mmap.mmap, int, int, int] | None:
 
 def stock_by_symbol(symbol: str) -> dict[str, Any] | None:
     """根据股票代码从数据库查找股票信息"""
+    index = market_index_by_symbol(symbol)
+    if index:
+        return {
+            "symbol": index["symbol"],
+            "name": index["name"],
+            "market": index["market"],
+            "_last_date": None,
+            "_last_close": None,
+            "_last_volume": None,
+            "_total_bars": 0,
+            "_source_symbol": index["source_symbol"],
+            "_is_index": True,
+        }
     conn = get_db()
     cursor = conn.execute("""
         SELECT symbol, name, market, last_date, last_close, last_volume, total_bars
@@ -450,6 +469,15 @@ def stock_by_symbol(symbol: str) -> dict[str, Any] | None:
         "_last_volume": last_volume,
         "_total_bars": total_bars or 0,
     }
+
+
+def market_index_by_symbol(symbol: str) -> dict[str, str] | None:
+    key = symbol.upper()
+    if key in MARKET_INDEXES:
+        return MARKET_INDEXES[key]
+    if symbol in {"399001", "399006"}:
+        return MARKET_INDEXES[f"SZ{symbol}"]
+    return None
 
 
 def parse_date(value: str, field: str = "date") -> str:
@@ -1373,12 +1401,87 @@ def fetch_trading_date(base_date: str, direction: str) -> dict[str, Any]:
     }
 
 
+def fetch_index_bars(symbol: str, as_of_date: str, adjust: str, start_date: str) -> dict[str, Any]:
+    index = market_index_by_symbol(symbol)
+    if not index:
+        raise ValueError(f"unknown index symbol: {symbol}")
+
+    cache_key = (index["symbol"], as_of_date, adjust, start_date, "index")
+    cached = BAR_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < BAR_CACHE_TTL_SECONDS:
+        return deepcopy(cached[1])
+
+    day_file = eastmoney_day_file(index["market"])
+    if not day_file.exists():
+        raise RuntimeError(f"eastmoney day file not found: {day_file}")
+
+    bars = read_all_local_bars(
+        index["source_symbol"],
+        {"symbol": index["source_symbol"], "market": index["market"], "_entry_offset": -1},
+        day_file,
+        day_file.stat().st_mtime_ns,
+    )
+    start_value = date_int(start_date)
+    as_of_value = date_int(as_of_date)
+    filtered = [
+        bar for bar in bars
+        if start_value <= int(bar["date"].replace("-", "")) <= as_of_value
+    ]
+    result = {
+        "symbol": index["symbol"],
+        "name": index["name"],
+        "market": index["market"],
+        "adjust": adjust,
+        "as_of_date": as_of_date,
+        "source": "eastmoney_local_index",
+        "bars": filtered,
+    }
+    BAR_CACHE[cache_key] = (time.time(), deepcopy(result))
+    return result
+
+
+def fetch_market_indices(as_of_date: str) -> dict[str, Any]:
+    indices: list[dict[str, Any]] = []
+    trade_date = ""
+    for symbol in MARKET_INDEXES:
+        payload = fetch_index_bars(symbol, as_of_date, "none", "2020-01-01")
+        bars = payload.get("bars") or []
+        if not bars:
+            continue
+        latest = bars[-1]
+        trade_date = max(trade_date, latest["date"])
+        indices.append({
+            "symbol": payload["symbol"],
+            "name": payload["name"],
+            "market": payload["market"],
+            "date": latest["date"],
+            "open": latest["open"],
+            "high": latest["high"],
+            "low": latest["low"],
+            "close": latest["close"],
+            "prevClose": latest.get("prevClose"),
+            "change": latest.get("change", 0),
+            "pct": latest.get("pct", 0),
+            "volume": latest.get("volume", 0),
+            "amount": latest.get("amount", 0),
+        })
+    return {
+        "as_of_date": as_of_date,
+        "trade_date": trade_date or as_of_date,
+        "source": "eastmoney_local_index",
+        "indices": indices,
+    }
+
+
 def fetch_bars(symbol: str, as_of_date: str, adjust: str, start_date: str) -> dict[str, Any]:
     """
     从数据库查询 K 线数据
 
     目标响应时间: < 20ms
     """
+    if market_index_by_symbol(symbol):
+        return fetch_index_bars(symbol, as_of_date, adjust, start_date)
+
     stock = stock_by_symbol(symbol)
     if stock is None:
         raise ValueError(f"unknown symbol: {symbol}")
@@ -1626,6 +1729,11 @@ class BacktesterHandler(SimpleHTTPRequestHandler):
                         "quotes": [public_quote(quote) for quote in quotes],
                     }
                 )
+                return
+
+            if path == "/api/indices":
+                as_of_date = parse_date(self.required_query(query, "as_of_date"), "as_of_date")
+                self.send_json(fetch_market_indices(as_of_date))
                 return
 
             if path == "/api/trading-date":

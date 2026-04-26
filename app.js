@@ -58,6 +58,11 @@
   const DEFAULT_INDICATOR_PANEL_COUNT = 3;
   const INDICATOR_TYPES = ["macd", "rsi", "kdj", "dmi", "capital"];
   const DEFAULT_INDICATOR_PANEL_TYPES = ["macd", "dmi", "capital", "rsi", "kdj"];
+  const MARKET_INDEXES = [
+    { symbol: "SH000001", name: "上证指数", market: "SH" },
+    { symbol: "SZ399001", name: "深证成指", market: "SZ" },
+    { symbol: "SZ399006", name: "创业板指", market: "SZ" }
+  ];
   const API_START_DATE = "2020-01-01";
   const DEFAULT_SYMBOL = "000001";
   const EMPTY_ACCOUNT = {
@@ -71,8 +76,10 @@
 
   let stocks = [];
   let quoteRows = [];
+  let indexRows = [];
   let quoteVersion = 0;
   let quoteBySymbol = new Map();
+  let indexBySymbol = new Map();
   let stockBySymbol = new Map();
   let loadSeq = 0;
 
@@ -171,6 +178,7 @@
     marketBoard: document.getElementById("marketBoard"),
     detailBoard: document.getElementById("detailBoard"),
     marketFilterBar: document.getElementById("marketFilterBar"),
+    marketIndexBoard: document.getElementById("marketIndexBoard"),
     marketTableWrap: document.querySelector(".market-table-wrap"),
     marketTableBody: document.getElementById("marketTableBody"),
     quoteCount: document.getElementById("quoteCount"),
@@ -510,7 +518,10 @@
         }
       });
     }
-    stockBySymbol = new Map(stocks.map((stock) => [stock.symbol, stock]));
+    stockBySymbol = new Map([
+      ...stocks.map((stock) => [stock.symbol, stock]),
+      ...MARKET_INDEXES.map((stock) => [stock.symbol, stock])
+    ]);
   }
 
   function setStocksFromQuotes() {
@@ -534,14 +545,17 @@
     el.marketStatus.textContent = `扫描东方财富本地全市场行情 · as_of_date=${state.asOfDate}`;
 
     try {
-      const payload = await fetchQuotes();
+      const [payload, indexPayload] = await Promise.all([fetchQuotes(), fetchIndices()]);
       if (sequence !== loadSeq) return;
       const tradingDate = payload.trade_date || (payload.quotes && payload.quotes[0] && payload.quotes[0].date);
       if (tradingDate && tradingDate !== state.asOfDate) state.asOfDate = tradingDate;
       quoteRows = payload.quotes || [];
+      indexRows = normalizeIndexRows(indexPayload);
       quoteVersion += 1;
       quoteBySymbol = new Map();
+      indexBySymbol = new Map();
       quoteRows.forEach((quote) => quoteBySymbol.set(quote.symbol, quote));
+      indexRows.forEach((quote) => indexBySymbol.set(quote.symbol, quote));
       if (quoteRows.length) setStocksFromQuotes();
       if (!stockBySymbol.has(state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
       if (state.view === "detail") await ensureSymbolBars(state.symbol);
@@ -565,6 +579,11 @@
     const payload = await fetchQuoteSnapshotForDate(requestedDate);
     perfEnd(t);
     return payload;
+  }
+
+  async function fetchIndices() {
+    const params = new URLSearchParams({ as_of_date: state.asOfDate });
+    return fetchJson(`/api/indices?${params.toString()}`);
   }
 
   async function fetchQuoteSnapshotForDate(requestedDate) {
@@ -653,6 +672,27 @@
           return quote;
         });
     return normalized;
+  }
+
+  function normalizeIndexRows(payload) {
+    const rows = Array.isArray(payload && payload.indices) ? payload.indices : [];
+    return MARKET_INDEXES.map((meta) => {
+      const row = rows.find((item) => item.symbol === meta.symbol);
+      return {
+        ...meta,
+        ...(row || {}),
+        date: row && row.date ? row.date : state.asOfDate,
+        open: row ? row.open : NaN,
+        high: row ? row.high : NaN,
+        low: row ? row.low : NaN,
+        close: row ? row.close : NaN,
+        change: row ? row.change : NaN,
+        pct: row ? row.pct : NaN,
+        volume: row ? row.volume : 0,
+        amount: row ? row.amount : 0,
+        isIndex: true
+      };
+    });
   }
 
   async function fetchBars(symbol) {
@@ -753,6 +793,7 @@
     el.marketStatus.textContent = `东方财富本地行情 · 服务端截断至 ${state.asOfDate}`;
     renderView();
     renderMarketStrip();
+    renderMarketIndexBoard();
     if (state.view === "market") renderMarketTable();
     renderQuotes();
     renderHeader();
@@ -850,19 +891,43 @@
   }
 
   function renderMarketStrip() {
-    const symbols = ["000001", "600519", state.symbol].filter((symbol, index, arr) => arr.indexOf(symbol) === index);
-    const tiles = symbols
-      .map((symbol) => {
-        const stock = getStock(symbol);
-        const quote = getQuote(symbol);
-        if (!stock || !quote) {
-          return makeIndexTile(stock ? stock.name : symbol, NaN, NaN, symbol);
-        }
-        return makeIndexTile(stock.name, quote.close, quote.pct, symbol);
+    const tiles = MARKET_INDEXES
+      .map((meta) => {
+        const quote = getQuote(meta.symbol);
+        return makeIndexTile(meta.name, quote ? quote.close : NaN, quote ? quote.pct : NaN, meta.symbol);
       })
       .join("");
     el.marketStrip.innerHTML = tiles || `<div class="empty-state">暂无行情</div>`;
-    el.marketStrip.querySelectorAll(".index-tile").forEach((tile) => {
+    bindIndexTileOpen(el.marketStrip);
+  }
+
+  function renderMarketIndexBoard() {
+    if (!el.marketIndexBoard) return;
+    el.marketIndexBoard.innerHTML = MARKET_INDEXES
+      .map((meta) => {
+        const quote = getQuote(meta.symbol);
+        const cls = quote && quote.pct > 0 ? "up" : quote && quote.pct < 0 ? "down" : "flat";
+        const change = quote && Number.isFinite(quote.change) ? `${quote.change > 0 ? "+" : ""}${formatPrice(quote.change)}` : "--";
+        const pct = quote && Number.isFinite(quote.pct) ? `${quote.pct > 0 ? "+" : ""}${quote.pct.toFixed(2)}%` : "--";
+        return `
+          <div class="market-index-card" data-symbol="${meta.symbol}" title="双击查看 ${escapeHtml(meta.name)} K 线">
+            <div>
+              <strong>${escapeHtml(meta.name)}</strong>
+              <span>${quote ? quote.date : state.asOfDate}</span>
+            </div>
+            <b class="${cls}">${quote ? formatOptional(quote.close) : "--"}</b>
+            <span class="${cls}">${change} / ${pct}</span>
+            <small>额 ${quote ? formatMoneyCompact(quote.amount) : "--"} · 量 ${quote ? formatCompact(quote.volume) : "--"}</small>
+          </div>
+        `;
+      })
+      .join("");
+    bindIndexTileOpen(el.marketIndexBoard);
+  }
+
+  function bindIndexTileOpen(root) {
+    if (!root) return;
+    root.querySelectorAll("[data-symbol]").forEach((tile) => {
       tile.addEventListener("dblclick", () => {
         const sym = tile.dataset.symbol;
         if (sym) openSymbol(sym);
@@ -964,6 +1029,10 @@
     if (!el.boardRule) return;
     const stock = getStock(state.symbol);
     if (!stock) { el.boardRule.textContent = "--"; return; }
+    if (MARKET_INDEXES.some((item) => item.symbol === state.symbol)) {
+      el.boardRule.textContent = "大盘指数";
+      return;
+    }
     const info = getBoardInfo(stock.symbol, stock.name);
     el.boardRule.textContent = `${info.label} ±${info.limitPct}%`;
   }
@@ -2742,11 +2811,11 @@
   }
 
   function getStock(symbol) {
-    return stockBySymbol.get(symbol);
+    return stockBySymbol.get(symbol) || MARKET_INDEXES.find((item) => item.symbol === symbol);
   }
 
   function getQuote(symbol) {
-    return quoteBySymbol.get(symbol);
+    return quoteBySymbol.get(symbol) || indexBySymbol.get(symbol);
   }
 
   function sortedQuotes() {

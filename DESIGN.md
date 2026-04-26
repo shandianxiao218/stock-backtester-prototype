@@ -326,3 +326,10 @@ GET /api/bars?symbol=...&as_of_date=... - K线数据
 - Detail K-line view supports mouse wheel stock navigation. Wheel down moves to the next stock in the current left-side list/filter, wheel up moves to the previous stock.
 - Default chart layout is 3 indicator panels: MACD, DMI, Capital Game. The main chart enables both MA and BOLL by default.
 - Crosshair readout keeps the main price fields unchanged and appends active indicator panel values for the hovered K-line, no matter whether the pointer is over the main chart, volume chart, or any indicator panel.
+
+# Market Index K-Line Support (2026-04-26)
+
+- The all-market page shows a top index board for 上证指数, 深证成指, and 创业板指.
+- Index cards use Eastmoney local day files directly through aliases: `SH000001`, `SZ399001`, and `SZ399006`.
+- Double-clicking an index card opens the corresponding index K-line page. Bare stock code `000001` still resolves to 平安银行; the Shanghai index uses the explicit `SH000001` alias.
+- Static `app.js` and `styles.css` are versioned from `index.html` to avoid stale browser cache during local testing.
