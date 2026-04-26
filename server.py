@@ -523,11 +523,47 @@ def file_signature(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:
     return tuple(signature)
 
 
+_PINYIN_TABLE: dict[str, str] | None = None
+
+
+def _build_pinyin_table() -> dict[str, str]:
+    try:
+        from pypinyin import pinyin, Style
+    except ImportError:
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pypinyin", "-q"])
+        from pypinyin import pinyin, Style
+
+    table: dict[str, str] = {}
+    for stock in load_stocks_from_db():
+        name = stock.get("name", "")
+        for ch in name:
+            if ch in table or not ('一' <= ch <= '鿿'):
+                continue
+            try:
+                result = pinyin(ch, style=Style.FIRST_LETTER)
+                table[ch] = result[0][0].lower() if result and result[0] else ''
+            except Exception:
+                table[ch] = ''
+    return table
+
+
+def _pinyin_initials(name: str) -> str:
+    global _PINYIN_TABLE
+    if _PINYIN_TABLE is None:
+        _PINYIN_TABLE = _build_pinyin_table()
+    return ''.join(
+        _PINYIN_TABLE.get(ch, ch.lower() if ch.isascii() and ch.isalpha() else '')
+        for ch in name
+    )
+
+
 def public_stock(stock: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": stock["symbol"],
         "name": stock["name"],
         "market": stock["market"],
+        "py": _pinyin_initials(stock.get("name", "")),
     }
 
 

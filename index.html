@@ -36,6 +36,11 @@
             <span>行情池</span>
             <span id="visibleDateTag"></span>
           </div>
+          <div class="quote-tabs">
+            <button class="quote-tab active" data-list="all">全部</button>
+            <button class="quote-tab" data-list="watch">自选</button>
+            <button class="quote-tab" data-list="positions">持仓</button>
+          </div>
           <div class="quote-search">
             <input id="stockSearch" type="search" placeholder="代码 / 名称" />
           </div>
@@ -48,6 +53,12 @@
               <button id="backToMarket" class="text-button">全市场</button>
               <strong id="symbolTitle">--</strong>
               <span id="symbolMeta"></span>
+            </div>
+
+            <div class="period-tabs" role="tablist" aria-label="K线周期">
+              <button class="period-tab active" data-period="daily">日线</button>
+              <button class="period-tab" data-period="weekly">周线</button>
+              <button class="period-tab" data-period="monthly">月线</button>
             </div>
 
             <div class="chart-actions">

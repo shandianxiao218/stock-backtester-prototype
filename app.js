@@ -56,7 +56,7 @@
   const MIN_DISPLAY_BARS = 30;
   const MAX_DISPLAY_BARS = 260;
   const INDICATOR_TYPES = ["macd", "rsi", "kdj", "dmi", "capital"];
-  const API_START_DATE = "2025-01-01";
+  const API_START_DATE = "2020-01-01";
   const DEFAULT_SYMBOL = "000001";
   const EMPTY_ACCOUNT = {
     cash: INITIAL_CASH,
@@ -81,6 +81,7 @@
     symbol: DEFAULT_SYMBOL,
     asOfDate: defaultAsOfDate(),
     view: "market",
+    period: "daily",
     displayBars: DEFAULT_DISPLAY_BARS,
     quoteSort: { key: "pct", dir: "desc" },
     indicatorPanels: defaultIndicatorPanels(),
@@ -94,6 +95,8 @@
     playing: false,
     timer: null,
     search: "",
+    listMode: "all",
+    watchlist: loadWatchlist(),
     loading: false,
     tool: "cursor",
     hover: null,
@@ -267,6 +270,14 @@
       renderMarketTable();
     });
 
+    document.querySelectorAll(".quote-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.listMode = btn.dataset.list;
+        document.querySelectorAll(".quote-tab").forEach((b) => b.classList.toggle("active", b.dataset.list === state.listMode));
+        renderQuotes();
+      });
+    });
+
     el.backToMarket.addEventListener("click", () => {
       state.view = "market";
       renderAll();
@@ -328,6 +339,14 @@
       renderCharts();
     });
 
+    document.querySelectorAll(".period-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.period = btn.dataset.period;
+        document.querySelectorAll(".period-tab").forEach((b) => b.classList.toggle("active", b.dataset.period === state.period));
+        renderCharts();
+      });
+    });
+
     el.zoomMore.addEventListener("click", () => zoomChart(20));
     el.zoomLess.addEventListener("click", () => zoomChart(-20));
 
@@ -386,7 +405,13 @@
       canvas.addEventListener("pointerleave", handlePointerLeave);
     });
 
+    el.indicatorCanvases.forEach((canvas, index) => {
+      canvas.addEventListener("dblclick", (event) => showIndicatorParamModal(index, event));
+    });
+    el.volumeCanvas.addEventListener("dblclick", (event) => showIndicatorParamModal(-1, event));
+
     window.addEventListener("resize", renderCharts);
+    window.addEventListener("keydown", handleGlobalKeydown);
   }
 
   async function loadStocks() {
@@ -412,7 +437,10 @@
       quoteBySymbol = new Map();
       quoteRows.forEach((quote) => quoteBySymbol.set(quote.symbol, quote));
       if (quoteRows.length && stocks.length !== quoteRows.length) {
-        stocks = quoteRows.map((quote) => ({ symbol: quote.symbol, name: quote.name, market: quote.market }));
+        stocks = quoteRows.map((quote) => {
+          const existing = stocks.find((s) => s.symbol === quote.symbol);
+          return { symbol: quote.symbol, name: quote.name, market: quote.market, py: existing ? existing.py : "" };
+        });
       }
       if (!stocks.some((stock) => stock.symbol === state.symbol) && stocks.length) state.symbol = stocks[0].symbol;
       if (state.view === "detail") await ensureSymbolBars(state.symbol);
@@ -700,14 +728,23 @@
 
   function renderQuotes() {
     const t = perfStart("renderQuotes");
-    const filtered = filteredSortedQuotes().slice(0, 40);
+    let filtered = filteredSortedQuotes();
+    const account = rebuildAccount();
+    if (state.listMode === "watch") {
+      filtered = filtered.filter((q) => state.watchlist.includes(q.symbol));
+    } else if (state.listMode === "positions") {
+      filtered = filtered.filter((q) => account.positions[q.symbol] && account.positions[q.symbol].qty > 0);
+    }
+    const visible = filtered.slice(0, 80);
 
-    el.quoteList.innerHTML = filtered
+    el.quoteList.innerHTML = visible
       .map((quote) => {
         const cls = quote.change > 0 ? "up" : quote.change < 0 ? "down" : "flat";
         const stale = quote.suspended ? " · 停牌" : "";
+        const star = state.watchlist.includes(quote.symbol) ? "★" : "☆";
         return `
           <button class="quote-row ${quote.symbol === state.symbol ? "active" : ""}" data-symbol="${quote.symbol}">
+            <span class="quote-star" data-watch="${quote.symbol}">${star}</span>
             <span>
               <strong>${quote.symbol}</strong>
               <small>${escapeHtml(quote.name)}${stale}</small>
@@ -721,12 +758,20 @@
       })
       .join("");
 
+    el.quoteList.querySelectorAll(".quote-star").forEach((star) => {
+      star.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleWatchlist(star.dataset.watch);
+        renderQuotes();
+      });
+    });
     el.quoteList.querySelectorAll(".quote-row").forEach((row) => {
       row.addEventListener("click", async () => {
         state.symbol = row.dataset.symbol;
         state.hover = null;
         state.rangeSelection = null;
         renderHeader();
+        renderBoardRule();
       });
       row.addEventListener("dblclick", () => openSymbol(row.dataset.symbol));
     });
@@ -771,8 +816,11 @@
 
   function renderReadout() {
     const bars = currentBars();
-    const bar = bars[bars.length - 1];
-    const prev = bars[Math.max(0, bars.length - 2)];
+    const indicators = calculateIndicators(bars);
+    const hoverIdx = state.hover ? state.hover.index : -1;
+    const idx = hoverIdx >= 0 && hoverIdx < bars.length ? hoverIdx : bars.length - 1;
+    const bar = bars[idx];
+    const prev = bars[Math.max(0, idx - 1)];
     if (!bar || !prev) {
       el.priceReadout.innerHTML = `<div class="readout-cell"><span>行情</span><strong>--</strong></div>`;
       el.orderPrice.textContent = "--";
@@ -781,19 +829,23 @@
 
     const change = bar.close - prev.close;
     const pct = prev.close ? (change / prev.close) * 100 : 0;
-    const indicators = calculateIndicators(bars);
-    const maFast = indicators.maFast[bars.length - 1];
-    const maSlow = indicators.maSlow[bars.length - 1];
-    const rsiValue = indicators.rsiFastLine[bars.length - 1];
+    const maFast = indicators.maFast[idx];
+    const maMid = indicators.maMid[idx];
+    const maSlow = indicators.maSlow[idx];
+    const rsiValue = indicators.rsiFastLine[idx];
     const changeCls = change > 0 ? "up" : change < 0 ? "down" : "flat";
 
     const cells = [
+      ["日期", String(bar.date), ""],
       ["开盘", formatPrice(bar.open), ""],
       ["最高", formatPrice(bar.high), "up"],
       ["最低", formatPrice(bar.low), "down"],
       ["收盘", formatPrice(bar.close), changeCls],
       ["涨跌幅", `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`, changeCls],
-      [`MA${state.settings.indicators.maFast} / MA${state.settings.indicators.maSlow}`, `${formatOptional(maFast)} / ${formatOptional(maSlow)}`, ""],
+      ["成交量", formatCompact(bar.volume), ""],
+      [`MA${state.settings.indicators.maFast}`, formatOptional(maFast), ""],
+      [`MA${state.settings.indicators.maMid}`, formatOptional(maMid), ""],
+      [`MA${state.settings.indicators.maSlow}`, formatOptional(maSlow), ""],
       [`RSI${state.settings.indicators.rsiFast}`, formatOptional(rsiValue), rsiValue > 70 ? "up" : rsiValue < 30 ? "down" : ""]
     ];
 
@@ -808,7 +860,8 @@
       )
       .join("");
 
-    el.orderPrice.textContent = formatPrice(executionPrice("BUY", bar.close));
+    const latestBar = bars[bars.length - 1];
+    el.orderPrice.textContent = formatPrice(executionPrice("BUY", latestBar.close));
   }
 
   function renderRangeStats() {
@@ -932,6 +985,7 @@
       const panelIndicators = calculateIndicators(bars, indicatorSettingsForPanel(panel));
       drawIndicatorChart(canvas, bars, panelIndicators, range, panel);
     });
+    renderReadout();
     perfEnd(t);
   }
 
@@ -1035,10 +1089,11 @@
       drawSeries(ctx, indicators.bollUpper, range, pad, plotW, y, "#d8dfe8", barW);
       drawSeries(ctx, indicators.bollMid, range, pad, plotW, y, "#19b4a6", barW);
       drawSeries(ctx, indicators.bollLower, range, pad, plotW, y, "#d8dfe8", barW);
-      drawLegend(ctx, [`BOLL${p.bollPeriod}`], ["#19b4a6"], pad.left + 210, 15);
+      drawLegend(ctx, [`BOLL(${p.bollPeriod},${p.bollStd})`], ["#19b4a6"], pad.left + 210, 15);
     }
 
     drawDrawings(ctx, bars, range, xForIndex, y);
+    drawTradeMarkers(ctx, bars, range, xForIndex, y);
 
     const dates = [visible[0], visible[Math.floor(visible.length / 2)], visible[visible.length - 1]].filter(Boolean);
     dates.forEach((bar) => {
@@ -1077,6 +1132,12 @@
     drawAxisText(ctx, formatCompact(max), width - pad.right + 10, pad.top + 10, "#7f8a99", "left");
     drawAxisText(ctx, "VOL", width - pad.right - 6, 13, "#d7dde5", "right");
     drawCrosshair(ctx, "volume", pad, width, height, xForIndex);
+
+    if (state.hover && state.hover.source === "volume") {
+      const idx = clamp(state.hover.index, range.start, range.end);
+      const hoverBar = bars[idx];
+      if (hoverBar) drawAxisText(ctx, formatCompact(hoverBar.volume), width - pad.right + 10, y(hoverBar.volume) - 2, "#d7dde5", "left");
+    }
   }
 
   function drawIndicatorChart(canvas, bars, indicators, range, panelConfig = { type: state.panel }) {
@@ -1111,7 +1172,7 @@
       });
       drawSeries(ctx, indicators.macd, range, pad, plotW, y, "#e2b34b", barW);
       drawSeries(ctx, indicators.signal, range, pad, plotW, y, "#5ea1ff", barW);
-      drawLegend(ctx, [`DIF(${p.macdFast},${p.macdSlow})`, `DEA${p.macdSignal}`, "MACD"], ["#e2b34b", "#5ea1ff", "#e05252"], pad.left, 13);
+      drawLegend(ctx, [`MACD(${p.macdFast},${p.macdSlow},${p.macdSignal})`, "DIF", "DEA", "MACD柱"], ["#9aa5b4", "#e2b34b", "#5ea1ff", "#e05252"], pad.left, 13);
     }
 
     if (panel === "rsi") {
@@ -1123,7 +1184,7 @@
       drawSeries(ctx, indicators.rsiSlowLine, range, pad, plotW, y, "#5ea1ff", barW);
       drawAxisText(ctx, "70", width - pad.right + 10, y(70) + 4, "#7f8a99", "left");
       drawAxisText(ctx, "30", width - pad.right + 10, y(30) + 4, "#7f8a99", "left");
-      drawLegend(ctx, [`RSI${p.rsiFast} ${formatOptional(values[values.length - 1])}`, `RSI${p.rsiSlow}`], ["#e2b34b", "#5ea1ff"], pad.left, 13);
+      drawLegend(ctx, [`RSI(${p.rsiFast},${p.rsiSlow})`, `RSI${p.rsiFast}`, `RSI${p.rsiSlow}`], ["#9aa5b4", "#e2b34b", "#5ea1ff"], pad.left, 13);
     }
 
     if (panel === "kdj") {
@@ -1166,6 +1227,56 @@
 
     drawAxisText(ctx, panelTitle(panel), width - pad.right - 6, 13, "#d7dde5", "right");
     drawCrosshair(ctx, "indicator", pad, width, height, xForIndex);
+
+    if (state.hover && state.hover.source === "indicator") {
+      const idx = clamp(state.hover.index, range.start, range.end);
+      const rIdx = idx - range.start;
+      const values = indicatorHoverValues(indicators, panel, rIdx);
+      if (values.length) {
+        let cy = pad.top + 14;
+        ctx.save();
+        ctx.font = "11px Microsoft YaHei, Segoe UI, sans-serif";
+        values.forEach(({ label, value, color }) => {
+          ctx.fillStyle = color;
+          ctx.textAlign = "left";
+          ctx.fillText(`${label}:${formatOptional(value)}`, pad.left + 4, cy);
+          cy += 13;
+        });
+        ctx.restore();
+      }
+    }
+  }
+
+  function indicatorHoverValues(indicators, panel, rIdx) {
+    const idx = rIdx + (chartState.range ? chartState.range.start : 0);
+    const get = (arr) => (idx >= 0 && idx < arr.length ? arr[idx] : NaN);
+    if (panel === "macd") return [
+      { label: "DIF", value: get(indicators.macd), color: "#e2b34b" },
+      { label: "DEA", value: get(indicators.signal), color: "#5ea1ff" },
+      { label: "MACD", value: get(indicators.hist), color: "#e05252" }
+    ];
+    if (panel === "rsi") return [
+      { label: "RSI1", value: get(indicators.rsiFastLine), color: "#e2b34b" },
+      { label: "RSI2", value: get(indicators.rsiSlowLine), color: "#5ea1ff" }
+    ];
+    if (panel === "kdj") return [
+      { label: "K", value: get(indicators.k), color: "#e2b34b" },
+      { label: "D", value: get(indicators.d), color: "#5ea1ff" },
+      { label: "J", value: get(indicators.j), color: "#b884ff" }
+    ];
+    if (panel === "dmi") return [
+      { label: "PDI", value: get(indicators.pdi), color: "#e05252" },
+      { label: "MDI", value: get(indicators.mdi), color: "#20b26b" },
+      { label: "ADX", value: get(indicators.adx), color: "#e2b34b" },
+      { label: "ADXR", value: get(indicators.adxr), color: "#5ea1ff" }
+    ];
+    if (panel === "capital") return [
+      { label: "超大", value: get(indicators.superFund), color: "#e05252" },
+      { label: "大户", value: get(indicators.largeFund), color: "#e2b34b" },
+      { label: "中户", value: get(indicators.middleFund), color: "#5ea1ff" },
+      { label: "散户", value: get(indicators.retailFund), color: "#20b26b" }
+    ];
+    return [];
   }
 
   function drawDrawings(ctx, bars, range, xForIndex, y) {
@@ -1184,6 +1295,33 @@
       ctx.moveTo(xForIndex(startIndex), y(drawing.startPrice));
       ctx.lineTo(xForIndex(endIndex), y(drawing.endPrice));
       ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function drawTradeMarkers(ctx, bars, range, xForIndex, y) {
+    const trades = state.trades.filter((t) => t.symbol === state.symbol);
+    if (!trades.length) return;
+    ctx.save();
+    trades.forEach((trade) => {
+      const idx = bars.findIndex((bar) => bar.date === trade.date);
+      if (idx < range.start || idx > range.end) return;
+      const x = xForIndex(idx);
+      const isBuy = trade.side === "BUY";
+      const markerY = isBuy ? y(bars[idx].low) + 14 : y(bars[idx].high) - 14;
+      ctx.fillStyle = isBuy ? "#e05252" : "#20b26b";
+      ctx.beginPath();
+      if (isBuy) {
+        ctx.moveTo(x, markerY - 8);
+        ctx.lineTo(x - 5, markerY);
+        ctx.lineTo(x + 5, markerY);
+      } else {
+        ctx.moveTo(x, markerY + 8);
+        ctx.lineTo(x - 5, markerY);
+        ctx.lineTo(x + 5, markerY);
+      }
+      ctx.closePath();
+      ctx.fill();
     });
     ctx.restore();
   }
@@ -1217,13 +1355,6 @@
       line(ctx, pad.left, state.hover.y, width - pad.right, state.hover.y);
     }
     ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(13,17,22,0.88)";
-    ctx.fillRect(Math.min(width - pad.right - 150, Math.max(pad.left, x + 8)), pad.top + 4, 142, 38);
-    ctx.fillStyle = "#d7dde5";
-    ctx.textAlign = "left";
-    ctx.fillText(bar.date, Math.min(width - pad.right - 140, Math.max(pad.left + 8, x + 16)), pad.top + 20);
-    ctx.fillStyle = bar.close >= bar.open ? "#e05252" : "#20b26b";
-    ctx.fillText(`收 ${formatPrice(bar.close)} 量 ${formatCompact(bar.volume)}`, Math.min(width - pad.right - 140, Math.max(pad.left + 8, x + 16)), pad.top + 35);
 
     if (source === "price" && y) {
       const yy = y(bar.close);
@@ -1327,6 +1458,158 @@
       state.hover = null;
       renderCharts();
     }
+  }
+
+  let keyBuffer = "";
+  let keySelectedIdx = 0;
+  let keyMatches = [];
+
+  function handleGlobalKeydown(event) {
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
+
+    const popup = document.getElementById("stockJumpPopup");
+
+    // When popup is open, intercept all navigation keys regardless of focus
+    if (popup) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeJumpPopup();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (keyMatches.length > 0) {
+          const pick = keyMatches[keySelectedIdx] || keyMatches[0];
+          applyJumpPick(pick.symbol);
+        }
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        keySelectedIdx = Math.min(keySelectedIdx + 1, keyMatches.length - 1);
+        renderJumpPopup();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        keySelectedIdx = Math.max(keySelectedIdx - 1, 0);
+        renderJumpPopup();
+        return;
+      }
+      if (event.key === "Backspace") {
+        event.preventDefault();
+        keyBuffer = keyBuffer.slice(0, -1);
+        if (!keyBuffer) { closeJumpPopup(); return; }
+        updateJumpMatches();
+        renderJumpPopup();
+        return;
+      }
+    }
+
+    // Only handle digit/letter keys when not focused on an input
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+    if (event.key === "PageDown" || event.key === "PageUp") {
+      event.preventDefault();
+      navigateList(event.key === "PageDown" ? 1 : -1);
+      return;
+    }
+
+    const ch = event.key;
+    if (/^[0-9a-zA-Z]$/.test(ch)) {
+      event.preventDefault();
+      keyBuffer += ch.toLowerCase();
+      updateJumpMatches();
+      renderJumpPopup();
+    }
+  }
+
+  function updateJumpMatches() {
+    const q = keyBuffer;
+    if (!q || !stocks.length) { keyMatches = []; keySelectedIdx = 0; return; }
+    keyMatches = stocks.filter((s) => {
+      if (s.symbol.startsWith(q)) return true;
+      const py = String(s.py || "");
+      return py.startsWith(q) || py.includes(q);
+    }).slice(0, 20);
+    keySelectedIdx = 0;
+  }
+
+  function renderJumpPopup() {
+    let popup = document.getElementById("stockJumpPopup");
+    if (!keyBuffer) { closeJumpPopup(); return; }
+
+    if (!popup) {
+      popup = document.createElement("div");
+      popup.id = "stockJumpPopup";
+      popup.style.cssText = "position:fixed;z-index:9999;top:80px;left:50%;transform:translateX(-50%);min-width:280px;background:#151b22;border:1px solid #26303b;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.5);padding:0;overflow:hidden";
+      document.body.appendChild(popup);
+    }
+
+    const inputLine = `<div style="padding:10px 14px;border-bottom:1px solid #26303b;display:flex;align-items:center;gap:8px">
+      <span style="color:#7f8a99;font-size:12px">跳转</span>
+      <span style="color:#d7dde5;font-size:14px;font-weight:700;letter-spacing:1px">${escapeHtml(keyBuffer)}</span>
+      <span style="color:#7f8a99;font-size:11px;margin-left:auto">${keyMatches.length} 条结果 · ↑↓选择 · Enter确认 · Esc取消</span>
+    </div>`;
+
+    const listHtml = keyMatches.length
+      ? keyMatches.map((s, i) => {
+          const quote = getQuote(s.symbol);
+          const pct = quote ? quote.pct : 0;
+          const cls = pct > 0 ? "#e05252" : pct < 0 ? "#20b26b" : "#7f8a99";
+          const bg = i === keySelectedIdx ? "background:#1d2836;" : "";
+          return `<div class="jump-item" data-symbol="${s.symbol}" style="padding:7px 14px;cursor:pointer;display:flex;gap:12px;align-items:center;${bg}${i === keySelectedIdx ? "border-left:2px solid #19b4a6;" : "border-left:2px solid transparent;"}">
+            <span style="color:#d7dde5;font-weight:700;min-width:60px">${s.symbol}</span>
+            <span style="color:#d7dde5">${escapeHtml(s.name || "")}</span>
+            <span style="margin-left:auto;color:${cls};font-size:12px">${Number.isFinite(pct) ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%" : ""}</span>
+          </div>`;
+        }).join("")
+      : `<div style="padding:14px;color:#7f8a99;text-align:center">无匹配结果</div>`;
+
+    popup.innerHTML = inputLine + listHtml;
+
+    popup.querySelectorAll(".jump-item").forEach((item) => {
+      item.addEventListener("click", () => applyJumpPick(item.dataset.symbol));
+      item.addEventListener("mouseenter", () => {
+        const idx = keyMatches.findIndex((m) => m.symbol === item.dataset.symbol);
+        if (idx >= 0) { keySelectedIdx = idx; renderJumpPopup(); }
+      });
+    });
+  }
+
+  function applyJumpPick(symbol) {
+    closeJumpPopup();
+    if (!symbol) return;
+    state.symbol = symbol;
+    openSymbol(symbol);
+  }
+
+  function closeJumpPopup() {
+    keyBuffer = "";
+    keyMatches = [];
+    keySelectedIdx = 0;
+    const popup = document.getElementById("stockJumpPopup");
+    if (popup) popup.remove();
+  }
+
+  function navigateList(step) {
+    const list = currentQuoteList();
+    if (list.length < 2) return;
+    const idx = list.findIndex((q) => q.symbol === state.symbol);
+    const next = clamp(idx + step, 0, list.length - 1);
+    if (next === idx) return;
+    state.symbol = list[next].symbol;
+    if (state.view === "detail") openSymbol(state.symbol);
+    else { renderHeader(); renderBoardRule(); renderQuotes(); }
+  }
+
+  function currentQuoteList() {
+    const account = rebuildAccount();
+    let filtered = filteredSortedQuotes();
+    if (state.listMode === "watch") filtered = filtered.filter((q) => state.watchlist.includes(q.symbol));
+    else if (state.listMode === "positions") filtered = filtered.filter((q) => account.positions[q.symbol] && account.positions[q.symbol].qty > 0);
+    return filtered;
   }
 
   function canvasPoint(canvas, event) {
@@ -2110,6 +2393,83 @@
     panel[field] = Number(target.value) || 0;
   }
 
+  function showIndicatorParamModal(panelIndex, event) {
+    const existing = document.getElementById("indicatorParamModal");
+    if (existing) existing.remove();
+
+    let panel, configKey;
+    if (panelIndex < 0) {
+      panel = state.indicatorPanels[0];
+      configKey = null;
+    } else {
+      panel = state.indicatorPanels[panelIndex];
+      configKey = panelIndex;
+    }
+    if (!panel) return;
+    const type = panel.type || state.panel;
+    const p = indicatorSettingsForPanel(panel);
+    const defaults = defaultIndicatorPanels().find((d) => d.type === type) || defaultIndicatorPanels()[0];
+
+    const fields = [];
+    if (type === "macd") {
+      fields.push({ label: "快线", key: "macdFast", value: p.macdFast, min: 2, max: 120 });
+      fields.push({ label: "慢线", key: "macdSlow", value: p.macdSlow, min: 3, max: 260 });
+      fields.push({ label: "信号", key: "macdSignal", value: p.macdSignal, min: 2, max: 120 });
+    } else if (type === "rsi") {
+      fields.push({ label: "快线", key: "rsiFast", value: p.rsiFast, min: 2, max: 120 });
+      fields.push({ label: "慢线", key: "rsiSlow", value: p.rsiSlow, min: 2, max: 120 });
+    } else if (type === "kdj") {
+      fields.push({ label: "周期", key: "kdjPeriod", value: p.kdjPeriod, min: 3, max: 120 });
+    } else if (type === "dmi") {
+      fields.push({ label: "周期", key: "dmiPeriod", value: p.dmiPeriod, min: 3, max: 120 });
+    } else if (type === "capital") {
+      fields.push({ label: "周期", key: "capitalPeriod", value: p.capitalPeriod || 13, min: 3, max: 120 });
+    }
+
+    const title = panelTitle(type);
+    const modal = document.createElement("div");
+    modal.id = "indicatorParamModal";
+    modal.style.cssText = "position:fixed;z-index:9999;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.5)";
+    modal.innerHTML = `
+      <div style="background:#151b22;border:1px solid #26303b;border-radius:8px;padding:18px 22px;min-width:240px;box-shadow:0 8px 32px rgba(0,0,0,0.4)">
+        <div style="color:#d7dde5;font-size:14px;font-weight:700;margin-bottom:14px">${title} 参数设置</div>
+        ${fields.map((f) => `
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:10px;color:#7f8a99;font-size:12px">
+            <span style="width:40px">${f.label}</span>
+            <input type="number" data-key="${f.key}" min="${f.min}" max="${f.max}" value="${f.value}" style="flex:1;height:28px;padding:0 8px;background:#0c1014;border:1px solid #26303b;border-radius:4px;color:#d7dde5" />
+          </label>
+        `).join("")}
+        <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
+          <button id="ipmCancel" style="padding:6px 16px;background:#26303b;border:none;border-radius:4px;color:#d7dde5;cursor:pointer">取消</button>
+          <button id="ipmApply" style="padding:6px 16px;background:#19b4a6;border:none;border-radius:4px;color:#091014;cursor:pointer;font-weight:700">应用</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.querySelector("#ipmCancel").addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+    modal.querySelector("#ipmApply").addEventListener("click", () => {
+      modal.querySelectorAll("input[data-key]").forEach((input) => {
+        const key = input.dataset.key;
+        const value = parseInt(input.value, 10);
+        if (!Number.isFinite(value)) return;
+        if (key === "macdFast") { state.settings.indicators.macdFast = value; }
+        else if (key === "macdSlow") { state.settings.indicators.macdSlow = Math.max(state.settings.indicators.macdFast + 1, value); }
+        else if (key === "macdSignal") { state.settings.indicators.macdSignal = value; }
+        else if (key === "rsiFast") { state.settings.indicators.rsiFast = value; }
+        else if (key === "rsiSlow") { state.settings.indicators.rsiSlow = value; }
+        else if (key === "kdjPeriod") { state.settings.indicators.kdjPeriod = value; }
+        else if (key === "dmiPeriod") { state.settings.indicators.dmiPeriod = value; }
+        else if (key === "capitalPeriod") { state.settings.indicators.capitalPeriod = value; }
+      });
+      syncInputsFromSettings();
+      renderIndicatorPanelControls();
+      renderCharts();
+      modal.remove();
+    });
+  }
+
   function syncToolButtons() {
     document.querySelectorAll(".tool-button[data-tool]").forEach((item) => item.classList.toggle("active", item.dataset.tool === state.tool));
   }
@@ -2135,7 +2495,56 @@
 
   function currentBars() {
     const key = `${state.symbol}|${state.asOfDate}`;
-    return marketData.get(key) || [];
+    const daily = marketData.get(key) || [];
+    if (state.period === "daily" || !daily.length) return daily;
+    return aggregateBars(daily, state.period);
+  }
+
+  function aggregateBars(daily, period) {
+    const groups = new Map();
+    daily.forEach((bar) => {
+      const key = periodKey(bar.date, period);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(bar);
+    });
+    const result = [];
+    groups.forEach((bars) => {
+      const first = bars[0];
+      const last = bars[bars.length - 1];
+      result.push({
+        date: periodLabel(first.date, period, bars),
+        open: first.open,
+        high: Math.max(...bars.map((b) => b.high)),
+        low: Math.min(...bars.map((b) => b.low)),
+        close: last.close,
+        volume: bars.reduce((s, b) => s + b.volume, 0),
+        amount: bars.reduce((s, b) => s + b.amount, 0),
+        symbol: first.symbol
+      });
+    });
+    return result;
+  }
+
+  function periodKey(date, period) {
+    if (period === "weekly") {
+      const d = parseLocalDate(date);
+      const day = d.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      d.setDate(d.getDate() + diff);
+      return `W${toDateString(d)}`;
+    }
+    if (period === "monthly") return date.slice(0, 7);
+    return date;
+  }
+
+  function periodLabel(date, period, bars) {
+    if (period === "weekly") {
+      const first = bars[0].date.slice(5);
+      const last = bars[bars.length - 1].date.slice(5);
+      return `${first}~${last}`;
+    }
+    if (period === "monthly") return date.slice(0, 7);
+    return date;
   }
 
   function currentTradingDate() {
@@ -2307,6 +2716,24 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  function loadWatchlist() {
+    try {
+      const data = localStorage.getItem("watchlist");
+      return data ? JSON.parse(data) : [];
+    } catch (_) { return []; }
+  }
+
+  function saveWatchlist(list) {
+    try { localStorage.setItem("watchlist", JSON.stringify(list)); } catch (_) {}
+  }
+
+  function toggleWatchlist(symbol) {
+    const idx = state.watchlist.indexOf(symbol);
+    if (idx >= 0) state.watchlist.splice(idx, 1);
+    else state.watchlist.push(symbol);
+    saveWatchlist(state.watchlist);
   }
 
   function defaultAsOfDate() {

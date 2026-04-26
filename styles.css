@@ -261,6 +261,28 @@ select:focus {
   border-bottom: 0;
 }
 
+.quote-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.quote-tab {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.quote-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 700;
+}
+
 .quote-search {
   padding: 10px;
   border-bottom: 1px solid var(--line-soft);
@@ -277,14 +299,21 @@ select:focus {
 .quote-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
   padding: 9px 10px;
   border: 0;
   border-bottom: 1px solid var(--line-soft);
   background: transparent;
   color: var(--text);
   text-align: left;
+}
+
+.quote-star {
+  color: var(--accent-2);
+  font-size: 12px;
+  cursor: pointer;
+  padding-top: 2px;
 }
 
 .quote-row:hover,
@@ -341,12 +370,40 @@ select:focus {
 .chart-toolbar {
   min-height: 48px;
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) auto;
+  grid-template-columns: minmax(190px, 1fr) auto auto;
   align-items: center;
   gap: 14px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--line-soft);
   background: #12171d;
+}
+
+.period-tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.period-tab {
+  padding: 4px 14px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-right: 1px solid var(--line);
+}
+
+.period-tab:last-child {
+  border-right: none;
+}
+
+.period-tab.active {
+  background: var(--accent);
+  color: #091014;
+  font-weight: 700;
 }
 
 .symbol-head {
