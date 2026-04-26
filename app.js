@@ -394,8 +394,8 @@
       });
     });
 
-    el.zoomMore.addEventListener("click", () => zoomChart(20));
-    el.zoomLess.addEventListener("click", () => zoomChart(-20));
+    el.zoomMore.addEventListener("click", () => zoomChart(-20));
+    el.zoomLess.addEventListener("click", () => zoomChart(20));
 
     el.indicatorPanelControls.addEventListener("change", (event) => {
       updateIndicatorPanel(event.target);
@@ -2939,7 +2939,7 @@
   }
 
   function defaultMarketFilters() {
-    return { main: true, chinext: true, star: true, st: true };
+    return { main: true, chinext: true, star: false, st: false };
   }
 
   function loadMarketFilters() {
