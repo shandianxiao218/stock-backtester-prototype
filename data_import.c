@@ -69,6 +69,111 @@ typedef struct {
     double amount;
 } BarData;
 
+// Forward declarations (needed because build_name_table precedes their definitions)
+static int get_file_size64(HANDLE hFile, uint64_t *file_size);
+
+// Name lookup hash map — replaces per-stock file scanning
+#define NAME_MAP_SIZE 16384
+typedef struct NameEntry {
+    char code[8];
+    char name[EM_MAX_NAME];
+    struct NameEntry *next;
+} NameEntry;
+static NameEntry *g_name_map[NAME_MAP_SIZE];
+
+static unsigned name_hash(const char *code) {
+    unsigned h = 5381;
+    while (*code) h = h * 33 + (unsigned char)*code++;
+    return h & (NAME_MAP_SIZE - 1);
+}
+
+static void name_map_set(const char *code, const char *name) {
+    unsigned h = name_hash(code);
+    NameEntry *e = malloc(sizeof(NameEntry));
+    if (!e) return;
+    strncpy(e->code, code, 7); e->code[7] = '\0';
+    strncpy(e->name, name, EM_MAX_NAME - 1); e->name[EM_MAX_NAME - 1] = '\0';
+    e->next = g_name_map[h];
+    g_name_map[h] = e;
+}
+
+static const char* name_map_get(const char *code) {
+    unsigned h = name_hash(code);
+    NameEntry *e = g_name_map[h];
+    while (e) { if (strcmp(e->code, code) == 0) return e->name; e = e->next; }
+    return NULL;
+}
+
+static void name_map_free(void) {
+    for (int i = 0; i < NAME_MAP_SIZE; i++) {
+        NameEntry *e = g_name_map[i];
+        while (e) { NameEntry *n = e->next; free(e); e = n; }
+        g_name_map[i] = NULL;
+    }
+}
+
+static void build_name_table(const char *name_file) {
+    HANDLE hFile = CreateFileA(name_file, GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    uint64_t file_size64 = 0;
+    if (!get_file_size64(hFile, &file_size64)) { CloseHandle(hFile); return; }
+    size_t file_size = (size_t)file_size64;
+    if (file_size < 7) { CloseHandle(hFile); return; }
+
+    HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!hMap) { CloseHandle(hFile); return; }
+    char *mm = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
+    if (!mm) { CloseHandle(hMap); CloseHandle(hFile); return; }
+
+    for (size_t i = 0; i + 6 <= file_size; i++) {
+        unsigned char c = mm[i];
+        if (c < '0' || c > '6') continue;
+        int ok = 1;
+        for (int d = 1; d < 6; d++) {
+            if (!isdigit((unsigned char)mm[i + d])) { ok = 0; break; }
+        }
+        if (!ok) continue;
+        if (i > 0 && isdigit((unsigned char)mm[i - 1])) continue;
+        if (i + 6 < file_size && isdigit((unsigned char)mm[i + 6])) continue;
+
+        const char *p = mm + i;
+        int valid = 0;
+        if (p[0]=='6' && p[1]=='0' && (p[2]=='0'||p[2]=='1'||p[2]=='3'||p[2]=='5')) valid=1;
+        if (p[0]=='6' && p[1]=='8' && (p[2]=='8'||p[2]=='9')) valid=1;
+        if (p[0]=='0' && p[1]=='0' && (p[2]=='0'||p[2]=='1'||p[2]=='2'||p[2]=='3')) valid=1;
+        if (p[0]=='3' && p[1]=='0' && (p[2]=='0'||p[2]=='1')) valid=1;
+        if (!valid) continue;
+
+        char code[7]; memcpy(code, mm + i, 6); code[6] = '\0';
+        if (name_map_get(code)) { i += 5; continue; }
+
+        if (i < 120) { i += 5; continue; }
+        const char *ws = mm + i - 120;
+        int best_score = 0; char best_name[EM_MAX_NAME]; best_name[0] = '\0';
+        for (const char *sp = ws; sp < mm + i; sp++) {
+            if (*sp == 0) {
+                const char *seg = sp + 1;
+                while (seg > ws && *(seg - 1) != 0) seg--;
+                int len = (int)(sp - seg);
+                if (len >= 4 && len <= 24) {
+                    int hb = 0;
+                    for (int j = 0; j < len; j++) if ((unsigned char)seg[j] >= 0x80) hb++;
+                    if (hb >= len / 2) {
+                        int sc = hb * 4 + len;
+                        if (sc > best_score) { best_score = sc; strncpy(best_name, seg, len); best_name[len] = '\0'; }
+                    }
+                }
+            }
+        }
+        if (best_name[0]) name_map_set(code, best_name);
+        i += 5;
+    }
+
+    UnmapViewOfFile(mm); CloseHandle(hMap); CloseHandle(hFile);
+}
+
 // Progress state
 static char g_progress_path[512];
 static sqlite3 *g_db = NULL;
@@ -148,8 +253,7 @@ static int init_schema(void) {
         "  low REAL,"
         "  close REAL,"
         "  volume INTEGER,"
-        "  amount REAL,"
-        "  PRIMARY KEY (symbol, date)"
+        "  amount REAL"
         ");"
         "CREATE TABLE IF NOT EXISTS daily_quotes ("
         "  symbol TEXT NOT NULL,"
@@ -173,7 +277,7 @@ static int init_schema(void) {
 
 static void create_indexes(void) {
     sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS idx_bars_date ON bars(date)", NULL, NULL, NULL);
-    sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS idx_bars_symbol_date ON bars(symbol, date)", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_bars_symbol_date ON bars(symbol, date)", NULL, NULL, NULL);
     sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS idx_bars_symbol_date_desc ON bars(symbol, date DESC)", NULL, NULL, NULL);
     sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS idx_stocks_market ON stocks(market)", NULL, NULL, NULL);
     sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS idx_daily_quotes_date_symbol ON daily_quotes(date, symbol)", NULL, NULL, NULL);
@@ -339,7 +443,7 @@ static int scan_market_file(const char *day_file, const char *market, StockInfo 
     return stock_count;
 }
 
-static int import_market_data(const char *day_file, const char *market, StockInfo *stocks, int stock_count, const char *name_file) {
+static int import_market_data(const char *day_file, const char *market, StockInfo *stocks, int stock_count) {
     HANDLE hFile = CreateFileA(day_file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return 0;
 
@@ -361,34 +465,15 @@ static int import_market_data(const char *day_file, const char *market, StockInf
     uint32_t data_start = EM_FILE_HEADER_SIZE + capacity * EM_ENTRY_SIZE;
     uint32_t block_size = records_per_block * EM_RECORD_SIZE;
 
-    HANDLE hNameFile = INVALID_HANDLE_VALUE;
-    HANDLE hNameMap = NULL;
-    char *name_mm = NULL;
-    size_t name_file_size = 0;
-    if (name_file && name_file[0]) {
-        hNameFile = CreateFileA(name_file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hNameFile != INVALID_HANDLE_VALUE) {
-            uint64_t name_size64 = 0;
-            if (get_file_size64(hNameFile, &name_size64)) {
-                name_file_size = (size_t)name_size64;
-                hNameMap = CreateFileMappingA(hNameFile, NULL, PAGE_READONLY, 0, 0, NULL);
-                if (hNameMap) {
-                    name_mm = MapViewOfFile(hNameMap, FILE_MAP_READ, 0, 0, 0);
-                }
-            }
-        }
-    }
-
-    // Prepare SQLite statements
     sqlite3_stmt *insert_bar;
     sqlite3_prepare_v2(g_db,
-        "INSERT OR REPLACE INTO bars (symbol, date, open, high, low, close, volume, amount) "
+        "INSERT INTO bars (symbol, date, open, high, low, close, volume, amount) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         -1, &insert_bar, NULL);
 
     sqlite3_stmt *insert_stock;
     sqlite3_prepare_v2(g_db,
-        "INSERT OR REPLACE INTO stocks (symbol, name, market, last_date, last_close, last_volume, total_bars) "
+        "INSERT INTO stocks (symbol, name, market, last_date, last_close, last_volume, total_bars) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         -1, &insert_stock, NULL);
 
@@ -406,9 +491,7 @@ static int import_market_data(const char *day_file, const char *market, StockInf
         }
 
         StockInfo *s = &stocks[i];
-
         uint32_t entry_offset = s->entry_offset;
-
         if (entry_offset < EM_FILE_HEADER_SIZE || entry_offset + EM_ENTRY_SIZE > data_start) continue;
 
         EMEntry *entry = (EMEntry*)(mm + entry_offset);
@@ -416,16 +499,16 @@ static int import_market_data(const char *day_file, const char *market, StockInf
         uint32_t used_blocks = (entry->total_days + records_per_block - 1) / records_per_block;
         if (used_blocks > block_count) used_blocks = block_count;
 
-        // Get stock name
+        // Get stock name from pre-built hash map
         char name[EM_MAX_NAME];
-        strncpy(name, s->symbol, EM_MAX_NAME - 1);
-        if (name_mm && name_file_size > 0) {
-            char *extracted = extract_name_from_memory(name_mm, name_file_size, s->symbol);
-            if (extracted[0]) strncpy(name, extracted, EM_MAX_NAME - 1);
+        const char *mapped_name = name_map_get(s->symbol);
+        if (mapped_name && mapped_name[0]) {
+            strncpy(name, mapped_name, EM_MAX_NAME - 1);
+        } else {
+            strncpy(name, s->symbol, EM_MAX_NAME - 1);
         }
         name[EM_MAX_NAME - 1] = '\0';
 
-        // Read bars
         int bars_count = 0;
         uint32_t latest_date = 0;
         double latest_close = 0;
@@ -466,7 +549,6 @@ static int import_market_data(const char *day_file, const char *market, StockInf
             }
         }
 
-        // Insert stock info
         sqlite3_bind_text(insert_stock, 1, s->symbol, -1, SQLITE_STATIC);
         sqlite3_bind_text(insert_stock, 2, name, -1, SQLITE_STATIC);
         sqlite3_bind_text(insert_stock, 3, s->market, -1, SQLITE_STATIC);
@@ -484,10 +566,6 @@ static int import_market_data(const char *day_file, const char *market, StockInf
 
     sqlite3_finalize(insert_bar);
     sqlite3_finalize(insert_stock);
-
-    if (name_mm) UnmapViewOfFile(name_mm);
-    if (hNameMap) CloseHandle(hNameMap);
-    if (hNameFile != INVALID_HANDLE_VALUE) CloseHandle(hNameFile);
 
     UnmapViewOfFile(mm);
     CloseHandle(hMap);
@@ -515,7 +593,17 @@ int main(int argc, char *argv[]) {
     strcpy(g_message, "Initializing...");
     write_progress();
 
-    // Open database
+    DWORD t_start = GetTickCount();
+
+    // Delete old database + WAL/SHM for fastest rebuild (avoids DELETE overhead)
+    char wal_path[512], shm_path[512];
+    sprintf(wal_path, "%s-wal", db_path);
+    sprintf(shm_path, "%s-shm", db_path);
+    DeleteFileA(db_path);
+    DeleteFileA(wal_path);
+    DeleteFileA(shm_path);
+
+    // Open fresh database
     int rc = sqlite3_open(db_path, &g_db);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(g_db));
@@ -523,24 +611,19 @@ int main(int argc, char *argv[]) {
     }
 
     // Enable optimizations
+    sqlite3_exec(g_db, "PRAGMA page_size=4096", NULL, NULL, NULL);
     sqlite3_exec(g_db, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
     sqlite3_exec(g_db, "PRAGMA synchronous=OFF", NULL, NULL, NULL);
     sqlite3_exec(g_db, "PRAGMA temp_store=MEMORY", NULL, NULL, NULL);
-    sqlite3_exec(g_db, "PRAGMA mmap_size=30000000000", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "PRAGMA cache_size=-64000", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "PRAGMA mmap_size=268435456", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "PRAGMA locking_mode=EXCLUSIVE", NULL, NULL, NULL);
 
     if (!init_schema()) {
         fprintf(stderr, "Cannot initialize schema: %s\n", sqlite3_errmsg(g_db));
         sqlite3_close(g_db);
         return 1;
     }
-
-    // Clear existing data
-    strcpy(g_message, "Clearing old data...");
-    write_progress();
-    sqlite3_exec(g_db, "DELETE FROM bars", NULL, NULL, NULL);
-    sqlite3_exec(g_db, "DELETE FROM stocks", NULL, NULL, NULL);
-    sqlite3_exec(g_db, "DELETE FROM daily_quotes", NULL, NULL, NULL);
-    sqlite3_exec(g_db, "DELETE FROM quote_snapshots", NULL, NULL, NULL);
 
     char sh_day_file[512], sz_day_file[512];
     char sh_name_file[512], sz_name_file[512];
@@ -550,14 +633,23 @@ int main(int argc, char *argv[]) {
     sprintf(sh_name_file, "%s\\swc8\\data\\StkQuoteList\\StkQuoteList_V10_1.dat", eastmoney_root);
     sprintf(sz_name_file, "%s\\swc8\\data\\StkQuoteList\\StkQuoteList_V10_0.dat", eastmoney_root);
 
+    // Build name lookup table (one-pass scan, replaces per-stock file scanning)
+    strcpy(g_message, "Building name index...");
+    write_progress();
+    DWORD t_names = GetTickCount();
+    build_name_table(sh_name_file);
+    build_name_table(sz_name_file);
+    fprintf(stderr, "  Name index built in %.1fs\n", (GetTickCount() - t_names) / 1000.0);
+
     int total_stocks = 0;
     int total_bars = 0;
 
     // Process SH market
+    DWORD t_import = GetTickCount();
     StockInfo *sh_stocks = NULL;
     int sh_count = scan_market_file(sh_day_file, "SH", &sh_stocks);
     if (sh_count > 0) {
-        import_market_data(sh_day_file, "SH", sh_stocks, sh_count, sh_name_file);
+        import_market_data(sh_day_file, "SH", sh_stocks, sh_count);
         total_stocks += sh_count;
     }
     free(sh_stocks);
@@ -566,10 +658,13 @@ int main(int argc, char *argv[]) {
     StockInfo *sz_stocks = NULL;
     int sz_count = scan_market_file(sz_day_file, "SZ", &sz_stocks);
     if (sz_count > 0) {
-        import_market_data(sz_day_file, "SZ", sz_stocks, sz_count, sz_name_file);
+        import_market_data(sz_day_file, "SZ", sz_stocks, sz_count);
         total_stocks += sz_count;
     }
     free(sz_stocks);
+    name_map_free();
+
+    fprintf(stderr, "  Data imported in %.1fs\n", (GetTickCount() - t_import) / 1000.0);
 
     // Get final stats
     sqlite3_stmt *stmt;
@@ -585,7 +680,8 @@ int main(int argc, char *argv[]) {
     g_total = 1;
     strcpy(g_message, "Precomputing daily quotes...");
     write_progress();
-    sqlite3_exec(g_db, "DELETE FROM daily_quotes", NULL, NULL, NULL);
+
+    DWORD t_precompute = GetTickCount();
     sqlite3_exec(g_db,
         "INSERT INTO daily_quotes (symbol, date, open, high, low, close, volume, amount, prev_close, avg_volume_5) "
         "SELECT symbol, date, open, high, low, close, volume, amount, "
@@ -593,9 +689,11 @@ int main(int argc, char *argv[]) {
         "       AVG(volume) OVER (PARTITION BY symbol ORDER BY date ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING) "
         "FROM bars",
         NULL, NULL, NULL);
+    fprintf(stderr, "  Daily quotes in %.1fs\n", (GetTickCount() - t_precompute) / 1000.0);
 
     strcpy(g_message, "Precomputing recent quote snapshots...");
     write_progress();
+    DWORD t_snap = GetTickCount();
     char snapshot_sql[2048];
     snprintf(snapshot_sql, sizeof(snapshot_sql),
         "INSERT INTO quote_snapshots(date, count, quotes_json) "
@@ -621,16 +719,20 @@ int main(int argc, char *argv[]) {
         ") GROUP BY date",
         snapshot_start);
     sqlite3_exec(g_db, snapshot_sql, NULL, NULL, NULL);
-    create_indexes();
+    fprintf(stderr, "  Snapshots in %.1fs\n", (GetTickCount() - t_snap) / 1000.0);
 
-    // Update source signature
+    DWORD t_idx = GetTickCount();
+    create_indexes();
+    fprintf(stderr, "  Indexes in %.1fs\n", (GetTickCount() - t_idx) / 1000.0);
+
+    // Final summary
+    double total_sec = (GetTickCount() - t_start) / 1000.0;
     strcpy(g_phase, "complete");
     sprintf(g_message, "Import complete: %d stocks, %d bars", total_stocks, total_bars);
     g_current = g_total;
     write_progress();
 
-    printf("Import complete: %d stocks, %d bars\n", total_stocks, total_bars);
-    printf("Progress file: %s\n", g_progress_path);
+    printf("Import complete: %d stocks, %d bars in %.1fs\n", total_stocks, total_bars, total_sec);
 
     // Clean up progress file after 5 seconds (give Python time to read final state)
     Sleep(5000);
