@@ -55,6 +55,7 @@
   const DEFAULT_DISPLAY_BARS = 90;
   const MIN_DISPLAY_BARS = 30;
   const MAX_DISPLAY_BARS = 260;
+  const DEFAULT_INDICATOR_PANEL_COUNT = 5;
   const INDICATOR_TYPES = ["macd", "rsi", "kdj", "dmi", "capital"];
   const API_START_DATE = "2020-01-01";
   const DEFAULT_SYMBOL = "000001";
@@ -85,6 +86,7 @@
     view: "market",
     period: "daily",
     displayBars: DEFAULT_DISPLAY_BARS,
+    indicatorPanelCount: DEFAULT_INDICATOR_PANEL_COUNT,
     quoteSort: { key: "pct", dir: "desc" },
     indicatorPanels: defaultIndicatorPanels(),
     panel: initialPanel(),
@@ -188,6 +190,7 @@
     zoomMore: document.getElementById("zoomMore"),
     zoomLess: document.getElementById("zoomLess"),
     barCountLabel: document.getElementById("barCountLabel"),
+    indicatorPanelCount: document.getElementById("indicatorPanelCount"),
     indicatorPanelControls: document.getElementById("indicatorPanelControls"),
     prevDay: document.getElementById("prevDay"),
     nextDay: document.getElementById("nextDay"),
@@ -402,6 +405,13 @@
       renderIndicatorPanelControls();
       renderCharts();
     });
+    if (el.indicatorPanelCount) {
+      el.indicatorPanelCount.addEventListener("change", () => {
+        state.indicatorPanelCount = intValue(el.indicatorPanelCount, DEFAULT_INDICATOR_PANEL_COUNT, 1, el.indicatorCanvases.length);
+        renderIndicatorPanelControls();
+        renderCharts();
+      });
+    }
 
     [
       el.maFast,
@@ -1096,7 +1106,10 @@
     if (!bars.length) {
       clearCanvas(el.priceCanvas);
       clearCanvas(el.volumeCanvas);
-      el.indicatorCanvases.forEach(clearCanvas);
+      el.indicatorCanvases.forEach((canvas, index) => {
+        canvas.hidden = index >= state.indicatorPanelCount;
+        if (!canvas.hidden) clearCanvas(canvas);
+      });
       chartState.range = null;
       chartState.priceScale = null;
       perfEnd(t);
@@ -1113,6 +1126,11 @@
     drawPriceChart(el.priceCanvas, bars, indicators, range);
     drawVolumeChart(el.volumeCanvas, bars, range);
     el.indicatorCanvases.forEach((canvas, index) => {
+      if (index >= state.indicatorPanelCount) {
+        canvas.hidden = true;
+        return;
+      }
+      canvas.hidden = false;
       const panel = state.indicatorPanels[index] || state.indicatorPanels[0];
       const panelIndicators = calculateIndicators(bars, indicatorSettingsForPanel(panel));
       drawIndicatorChart(canvas, bars, panelIndicators, range, panel);
@@ -1184,29 +1202,26 @@
         isLimitUp = bar.close >= prev.close * (1 + pct) - tol;
         isLimitDown = bar.close <= prev.close * (1 - pct) + tol;
       }
-      let strokeColor, fillColor;
+      let strokeColor;
       if (isLimitUp) {
         strokeColor = "#f5a623";
-        fillColor = "rgba(245,166,35,0.45)";
       } else if (isLimitDown) {
         strokeColor = "#20b26b";
-        fillColor = "rgba(32,178,107,0.22)";
       } else {
         strokeColor = rising ? "#e05252" : "#20b26b";
-        fillColor = rising ? "rgba(224,82,82,0.22)" : "rgba(32,178,107,0.22)";
       }
       const openY = y(bar.open);
       const closeY = y(bar.close);
       const highY = y(bar.high);
       const lowY = y(bar.low);
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 1;
-      line(ctx, x, highY, x, lowY);
-      ctx.fillStyle = fillColor;
-      ctx.strokeStyle = strokeColor;
       const bodyY = Math.min(openY, closeY);
       const bodyH = Math.max(2, Math.abs(closeY - openY));
-      ctx.fillRect(x - candleW / 2, bodyY, candleW, bodyH);
+      const bodyBottom = bodyY + bodyH;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1;
+      if (highY < bodyY) line(ctx, x, highY, x, bodyY);
+      if (lowY > bodyBottom) line(ctx, x, bodyBottom, x, lowY);
+      ctx.strokeStyle = strokeColor;
       ctx.strokeRect(x - candleW / 2, bodyY, candleW, bodyH);
     });
 
@@ -1976,6 +1991,7 @@
       settings: {
         panel: state.panel,
         displayBars: state.displayBars,
+        indicatorPanelCount: state.indicatorPanelCount,
         indicatorPanels: state.indicatorPanels,
         showMA: state.showMA,
         showBOLL: state.showBOLL,
@@ -2033,6 +2049,9 @@
   function applySettings(settings) {
     if (settings.panel) state.panel = settings.panel;
     if (settings.displayBars) state.displayBars = clamp(Number(settings.displayBars), MIN_DISPLAY_BARS, MAX_DISPLAY_BARS);
+    if (settings.indicatorPanelCount) {
+      state.indicatorPanelCount = clamp(Number(settings.indicatorPanelCount), 1, el.indicatorCanvases.length);
+    }
     if (Array.isArray(settings.indicatorPanels)) {
       state.indicatorPanels = settings.indicatorPanels.slice(0, 5).map((panel, index) => ({
         ...defaultIndicatorPanels()[index],
@@ -2465,8 +2484,15 @@
 
   function renderIndicatorPanelControls() {
     if (!el.indicatorPanelControls) return;
+    state.indicatorPanelCount = clamp(Number(state.indicatorPanelCount) || DEFAULT_INDICATOR_PANEL_COUNT, 1, el.indicatorCanvases.length);
+    if (el.indicatorPanelCount) el.indicatorPanelCount.value = state.indicatorPanelCount;
+    if (el.canvasStack) el.canvasStack.style.setProperty("--indicator-panel-count", String(state.indicatorPanelCount));
+    el.indicatorCanvases.forEach((canvas, index) => {
+      canvas.hidden = index >= state.indicatorPanelCount;
+    });
     state.indicatorPanels = state.indicatorPanels.slice(0, 5);
     el.indicatorPanelControls.innerHTML = state.indicatorPanels
+      .slice(0, state.indicatorPanelCount)
       .map((panel, index) => {
         const options = INDICATOR_TYPES.map(
           (type) => `<option value="${type}" ${panel.type === type ? "selected" : ""}>${panelTitle(type)}</option>`

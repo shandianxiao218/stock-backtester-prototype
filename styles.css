@@ -690,17 +690,25 @@ input[type="date"],
   color: var(--muted);
 }
 
-.indicator-panel-controls {
+.indicator-panel-bar {
   min-height: 36px;
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow-x: auto;
   padding: 5px 12px;
   border-bottom: 1px solid var(--line-soft);
   background: #0c1014;
 }
 
+.indicator-panel-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.indicator-panel-bar > label,
 .indicator-panel-controls label {
   display: inline-flex;
   align-items: center;
@@ -710,10 +718,15 @@ input[type="date"],
   white-space: nowrap;
 }
 
+.indicator-panel-bar > label input,
 .indicator-panel-controls select,
 .indicator-panel-controls input {
   height: 25px;
   padding: 0 6px;
+}
+
+.indicator-panel-bar > label input {
+  width: 44px;
 }
 
 .indicator-panel-controls select {
@@ -800,7 +813,7 @@ input[type="date"],
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(260px, 2.1fr) minmax(78px, 0.55fr) repeat(5, minmax(86px, 0.72fr));
+  grid-template-rows: minmax(260px, 2.1fr) minmax(78px, 0.55fr) repeat(var(--indicator-panel-count, 5), minmax(86px, 0.72fr));
   background: #080b0f;
 }
 
@@ -808,6 +821,10 @@ canvas {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+canvas[hidden] {
+  display: none !important;
 }
 
 #priceCanvas,
