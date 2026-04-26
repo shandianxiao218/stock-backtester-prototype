@@ -121,7 +121,6 @@
         commissionRatePct: 0.025,
         minCommission: 5,
         stampDutyRatePct: 0.05,
-        limitPct: 10,
         enforceLimit: true,
         enforceSuspension: true
       }
@@ -218,6 +217,7 @@
     minCommission: document.getElementById("minCommission"),
     stampDutyRate: document.getElementById("stampDutyRate"),
     limitPct: document.getElementById("limitPct"),
+    boardRule: document.getElementById("boardRule"),
     enforceLimit: document.getElementById("enforceLimit"),
     enforceSuspension: document.getElementById("enforceSuspension")
   };
@@ -363,7 +363,6 @@
       el.commissionRate,
       el.minCommission,
       el.stampDutyRate,
-      el.limitPct,
       el.enforceLimit,
       el.enforceSuspension
     ].forEach((input) => {
@@ -581,6 +580,7 @@
     renderQuotes();
     if (state.view === "market") renderMarketTable();
     renderHeader();
+    renderBoardRule();
     renderReadout();
     renderRangeStats();
     renderAccount();
@@ -759,6 +759,14 @@
 
     el.symbolTitle.textContent = `${stock.symbol} ${stock.name}`;
     el.symbolMeta.textContent = `${bar.date} · ${statusText} ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  }
+
+  function renderBoardRule() {
+    if (!el.boardRule) return;
+    const stock = getStock(state.symbol);
+    if (!stock) { el.boardRule.textContent = "--"; return; }
+    const info = getBoardInfo(stock.symbol, stock.name);
+    el.boardRule.textContent = `${info.label} ±${info.limitPct}%`;
   }
 
   function renderReadout() {
@@ -976,18 +984,40 @@
     }
 
     visible.forEach((bar, offset) => {
+      const barIndex = range.start + offset;
       const x = pad.left + offset * barW + barW / 2;
       const rising = bar.close >= bar.open;
-      const color = rising ? "#e05252" : "#20b26b";
+      const prev = bars[Math.max(0, barIndex - 1)];
+      let isLimitUp = false;
+      let isLimitDown = false;
+      if (prev && Number.isFinite(prev.close) && prev.close > 0) {
+        const stock = getStock(bar.symbol || state.symbol);
+        const info = getBoardInfo(bar.symbol || state.symbol, stock ? stock.name : "");
+        const pct = info.limitPct / 100;
+        const tol = prev.close * 0.0015;
+        isLimitUp = bar.close >= prev.close * (1 + pct) - tol;
+        isLimitDown = bar.close <= prev.close * (1 - pct) + tol;
+      }
+      let strokeColor, fillColor;
+      if (isLimitUp) {
+        strokeColor = "#f5a623";
+        fillColor = "rgba(245,166,35,0.45)";
+      } else if (isLimitDown) {
+        strokeColor = "#20b26b";
+        fillColor = "rgba(32,178,107,0.22)";
+      } else {
+        strokeColor = rising ? "#e05252" : "#20b26b";
+        fillColor = rising ? "rgba(224,82,82,0.22)" : "rgba(32,178,107,0.22)";
+      }
       const openY = y(bar.open);
       const closeY = y(bar.close);
       const highY = y(bar.high);
       const lowY = y(bar.low);
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = strokeColor;
       ctx.lineWidth = 1;
       line(ctx, x, highY, x, lowY);
-      ctx.fillStyle = rising ? "rgba(224,82,82,0.22)" : "rgba(32,178,107,0.22)";
-      ctx.strokeStyle = color;
+      ctx.fillStyle = fillColor;
+      ctx.strokeStyle = strokeColor;
       const bodyY = Math.min(openY, closeY);
       const bodyH = Math.max(2, Math.abs(closeY - openY));
       ctx.fillRect(x - candleW / 2, bodyY, candleW, bodyH);
@@ -1364,6 +1394,21 @@
     return "";
   }
 
+  function getBoardInfo(symbol, name) {
+    const s = String(symbol || "");
+    const n = String(name || "");
+    const isST = /(^|\s)[\*]?ST/i.test(n);
+    let board = "main";
+    let basePct = 10;
+    if (/^(688|689)/.test(s)) { board = "star"; basePct = 20; }
+    else if (/^(300|301)/.test(s)) { board = "chinext"; basePct = 20; }
+    else if (/^[48]/.test(s)) { board = "bse"; basePct = 30; }
+    else { board = "main"; basePct = 10; }
+    const limitPct = isST ? 5 : basePct;
+    const label = isST ? "ST" : board === "star" ? "科创板" : board === "chinext" ? "创业板" : board === "bse" ? "北交所" : "主板";
+    return { board, isST, limitPct, label };
+  }
+
   function marketRuleStatus(bars, index) {
     const bar = bars[index];
     const prev = bars[Math.max(0, index - 1)];
@@ -1375,14 +1420,17 @@
       return { suspended, limitUp: false, limitDown: false };
     }
 
-    const limit = Math.max(0.01, state.settings.trade.limitPct / 100);
+    const stock = getStock(bar.symbol || state.symbol);
+    const boardInfo = getBoardInfo(bar.symbol || state.symbol, stock ? stock.name : "");
+    const limit = boardInfo.limitPct / 100;
     const up = prev.close * (1 + limit);
     const down = prev.close * (1 - limit);
     const tolerance = prev.close * 0.0015;
     return {
       suspended,
       limitUp: bar.close >= up - tolerance,
-      limitDown: bar.close <= down + tolerance
+      limitDown: bar.close <= down + tolerance,
+      boardInfo
     };
   }
 
@@ -1639,7 +1687,6 @@
     cfg.commissionRatePct = numberValue(el.commissionRate, 0.025, 0, 1);
     cfg.minCommission = numberValue(el.minCommission, 5, 0, 100);
     cfg.stampDutyRatePct = numberValue(el.stampDutyRate, 0.05, 0, 1);
-    cfg.limitPct = numberValue(el.limitPct, 10, 1, 30);
     cfg.enforceLimit = el.enforceLimit.checked;
     cfg.enforceSuspension = el.enforceSuspension.checked;
   }
@@ -1664,7 +1711,6 @@
     el.commissionRate.value = cfg.commissionRatePct;
     el.minCommission.value = cfg.minCommission;
     el.stampDutyRate.value = cfg.stampDutyRatePct;
-    el.limitPct.value = cfg.limitPct;
     el.enforceLimit.checked = cfg.enforceLimit;
     el.enforceSuspension.checked = cfg.enforceSuspension;
     el.showMA.checked = state.showMA;

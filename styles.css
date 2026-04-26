@@ -821,6 +821,12 @@ canvas {
   grid-template-columns: 18px 1fr;
 }
 
+.model-settings .board-rule {
+  font-size: 13px;
+  color: var(--accent);
+  text-align: center;
+}
+
 .position-block,
 .trade-log-block {
   min-height: 0;
